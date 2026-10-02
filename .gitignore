@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+.pytest_cache/
+node_modules/
+dist/
+.next/
+data/*.db
+data/*.sqlite
+data/uploads/
+*.log
+
+.DS_Store
+.tmp/
+outputs/*.ndjson

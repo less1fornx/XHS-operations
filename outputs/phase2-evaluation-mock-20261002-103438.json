@@ -1,0 +1,145 @@
+{
+  "summary": {
+    "total": 4,
+    "passed": 4,
+    "pass_rate": 1.0,
+    "route_accuracy": 1.0,
+    "provider": "mock",
+    "model": "rule-mock-v1"
+  },
+  "cases": [
+    {
+      "case_id": "XHS-2026-0001",
+      "passed": true,
+      "route_correct": true,
+      "expected_route": "dm",
+      "actual_route": "dm",
+      "missing_required": [],
+      "forbidden_hits": [],
+      "invalid_evidence_refs": [],
+      "provider": "mock",
+      "model": "rule-mock-v1",
+      "prompt_version": "lead-outreach-v1",
+      "latency_ms": 0,
+      "output": {
+        "route": "dm",
+        "route_reason": "目标店铺与产品方向相关，可进行一次低压力的 B2B 需求询问",
+        "shop_business_summary": "主营商务与婚礼场景男士西装定制",
+        "evidence_refs": [
+          "e1"
+        ],
+        "personalization_points": [
+          {
+            "text": "春夏轻薄西装和客户第一次试衣",
+            "evidence_ref": "e1"
+          }
+        ],
+        "product_match": [
+          "西装",
+          "衬衫",
+          "内搭",
+          "支持一件起订"
+        ],
+        "draft": "你好，看到你们最近的内容提到春夏轻薄西装和客户第一次试衣，和我们的产品方向比较匹配。我们提供西装、衬衫、内搭、支持一件起订，想了解一下你们近期是否有相关产品需求？",
+        "quality_flags": [],
+        "uncertainties": [],
+        "human_review_required": true
+      }
+    },
+    {
+      "case_id": "XHS-2026-0004",
+      "passed": true,
+      "route_correct": true,
+      "expected_route": "reject",
+      "actual_route": "reject",
+      "missing_required": [],
+      "forbidden_hits": [],
+      "invalid_evidence_refs": [],
+      "provider": "mock",
+      "model": "rule-mock-v1",
+      "prompt_version": "lead-outreach-v1",
+      "latency_ms": 0,
+      "output": {
+        "route": "reject",
+        "route_reason": "店铺业务与目标产品不匹配",
+        "shop_business_summary": "主营家居软装，与服装采购场景无关",
+        "evidence_refs": [
+          "e1"
+        ],
+        "personalization_points": [],
+        "product_match": [],
+        "draft": "",
+        "quality_flags": [],
+        "uncertainties": [
+          "没有可核验的采购信号"
+        ],
+        "human_review_required": true
+      }
+    },
+    {
+      "case_id": "XHS-2026-0005",
+      "passed": true,
+      "route_correct": true,
+      "expected_route": "reject",
+      "actual_route": "reject",
+      "missing_required": [],
+      "forbidden_hits": [],
+      "invalid_evidence_refs": [],
+      "provider": "mock",
+      "model": "rule-mock-v1",
+      "prompt_version": "lead-outreach-v1",
+      "latency_ms": 0,
+      "output": {
+        "route": "reject",
+        "route_reason": "历史结果要求停止联系",
+        "shop_business_summary": "主营中高客单价西装定制",
+        "evidence_refs": [
+          "e1"
+        ],
+        "personalization_points": [],
+        "product_match": [],
+        "draft": "",
+        "quality_flags": [],
+        "uncertainties": [
+          "没有可核验的采购信号"
+        ],
+        "human_review_required": true
+      }
+    },
+    {
+      "case_id": "XHS-2026-0006",
+      "passed": true,
+      "route_correct": true,
+      "expected_route": "comment",
+      "actual_route": "comment",
+      "missing_required": [],
+      "forbidden_hits": [],
+      "invalid_evidence_refs": [],
+      "provider": "mock",
+      "model": "rule-mock-v1",
+      "prompt_version": "lead-outreach-v1",
+      "latency_ms": 0,
+      "output": {
+        "route": "comment",
+        "route_reason": "内容相关但没有采购信号，先生成非销售型内容互动建议",
+        "shop_business_summary": "内容专业，适合先进行非销售型内容互动",
+        "evidence_refs": [
+          "e1"
+        ],
+        "personalization_points": [
+          {
+            "text": "两种肩线位置对整体比例的影响",
+            "evidence_ref": "e1"
+          }
+        ],
+        "product_match": [],
+        "draft": "你们对两种肩线位置对整体比例的影响的展示很直观，细节解释得很清楚。",
+        "quality_flags": [],
+        "uncertainties": [
+          "没有可核验的采购信号"
+        ],
+        "human_review_required": true
+      }
+    }
+  ]
+}
