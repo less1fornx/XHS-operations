@@ -4,6 +4,7 @@ import sys
 import os
 import sqlite3
 import hashlib
+import hmac
 import json
 from datetime import datetime
 from threading import Lock, Thread
@@ -12,7 +13,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 # request.form() yields Starlette's UploadFile; FastAPI's is a subclass of it.
 from starlette.datastructures import UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -75,10 +76,30 @@ ShopType = Literal[
 RunRecord = dict[str, Any]
 
 app = FastAPI(title="Agent Operations API", version="0.1.0")
+# LAN sharing: other devices on the same network must present this code.
+# The machine itself (127.0.0.1) never needs it. Empty means local use only.
+ACCESS_CODE = os.getenv("AGENT_ACCESS_CODE", "").strip()
+LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
+
+
+@app.middleware("http")
+async def require_access_code(request: Request, call_next):
+    client = request.client.host if request.client else ""
+    if client not in LOOPBACK_HOSTS and request.method != "OPTIONS":
+        supplied = request.headers.get("X-Access-Code") or request.query_params.get("code") or ""
+        if not ACCESS_CODE or not hmac.compare_digest(supplied, ACCESS_CODE):
+            return JSONResponse(status_code=401, content={"detail": "access_code_required: 请输入访问码"})
+    return await call_next(request)
+
+
+# Registered after the access check so CORS headers are also set on 401 replies.
 app.add_middleware(
     CORSMiddleware,
-    # Vite picks the next free port when 5173 is taken, so allow any local port.
-    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
+    # This machine on any port, plus private-network addresses for LAN sharing.
+    allow_origin_regex=(
+        r"http://(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+"
+        r"|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|[\w-]+\.local):\d+"
+    ),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

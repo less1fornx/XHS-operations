@@ -43,6 +43,14 @@ cd /Users/askvenht/AI/agent-app
 
 端口被占用时可以换端口：`API_PORT=8001 WEB_PORT=5174 ./scripts/dev.sh`。
 
+让同一网络下的其他设备（例如手机）也能访问：
+
+```bash
+LAN=1 ./scripts/dev.sh
+```
+
+终端会显示局域网地址和一个 6 位访问码。其他设备第一次打开时输入访问码，本机不需要。只在可信的网络下使用。想固定访问码，可以在 `.env` 之外用 `AGENT_ACCESS_CODE=123456 LAN=1 ./scripts/dev.sh`。
+
 也可以分别手动启动：
 
 ```bash

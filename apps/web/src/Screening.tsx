@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { AlertTriangle, Check, ImagePlus, Plus, Send, Trash2, X } from 'lucide-react'
-import { API, api } from './api'
+import { API, accessCode, api } from './api'
 
 // Phase 2C: upload screenshots for up to 10 shops, let the system read and rank
 // them, then approve the list once (user decisions 2026-10-03).
@@ -159,7 +159,7 @@ export default function ScreeningView({ onOpenWorkflow }: { onOpenWorkflow: () =
   const updateDecision = (key: string, patch: Partial<Decision>) =>
     setDecisions((current) => ({ ...current, [key]: { ...current[key], ...patch } }))
 
-  const imageUrl = (path: string) => `${API}/api/batches/${batch?.id}/images/${path.split('/').pop()}`
+  const imageUrl = (path: string) => `${API}/api/batches/${batch?.id}/images/${path.split('/').pop()}${accessCode() ? `?code=${encodeURIComponent(accessCode())}` : ''}`
   const filledShops = slots.filter((files) => files.length > 0).length
   const failed = batch?.results.filter((item) => item.status === 'failed') || []
   const selectedCount = Object.values(decisions).filter((d) => d.route !== 'none').length

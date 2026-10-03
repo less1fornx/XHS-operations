@@ -19,7 +19,7 @@ import {
   X,
 } from 'lucide-react'
 import './App.css'
-import { api, keyPart } from './api'
+import { api, copyToClipboard, keyPart } from './api'
 import ScreeningView from './Screening'
 import ReplyPanel, { type ReplyState } from './Reply'
 
@@ -220,12 +220,7 @@ function App() {
   }
 
   const copyText = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text)
-      setNotice('文案已复制，可以直接粘贴到小红书')
-    } catch {
-      setNotice('浏览器不允许自动复制，请手动选中文案复制')
-    }
+    setNotice(await copyToClipboard(text) ? '文案已复制，可以直接粘贴到小红书' : '浏览器不允许自动复制，请手动选中文案复制')
   }
 
   const createRun = () => {
