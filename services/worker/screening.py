@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import time
 from pathlib import Path
@@ -13,7 +14,8 @@ from services.worker.screening_graph import ShopInput, classify_error
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-UPLOAD_ROOT = PROJECT_ROOT / "data" / "uploads" / "screening"
+# Overridable so test runs never write into the real upload folder.
+UPLOAD_ROOT = Path(os.getenv("AGENT_UPLOAD_DIR", str(PROJECT_ROOT / "data" / "uploads" / "screening")))
 # User decision 2026-10-03: original screenshots stay on this machine for 10 days.
 SCREENSHOT_RETENTION_DAYS = 10
 

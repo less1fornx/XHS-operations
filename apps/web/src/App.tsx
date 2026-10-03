@@ -2,13 +2,16 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
   Check,
+  ChevronDown,
   CircleDot,
   Clock3,
+  Copy,
   FileText,
   Images,
   Inbox,
   MessageCircle,
   PauseCircle,
+  Plus,
   RefreshCw,
   Send,
   ShieldCheck,
@@ -70,11 +73,47 @@ type RiskEvent = {
   created_at: string
 }
 
+type ListFilter = 'todo' | 'sending' | 'done' | 'all'
+
+const channelLabel: Record<string, string> = { dm: '私信', comment: '评论', none: '暂不触达' }
+const stageLabel: Record<string, string> = {
+  route_review: '待选路线', content_review: '待审文案', scheduled: '待发送', opened: '发送中', sent: '已发送',
+  failed: '发送异常', read_no_reply: '已读无回复', blocked: '已结束',
+}
+const stageBadge: Record<string, string> = {
+  route_review: 'warning', content_review: 'warning', scheduled: 'info', opened: 'info', sent: 'success',
+  failed: 'danger', read_no_reply: 'neutral', blocked: 'neutral',
+}
+const filterStages: Record<ListFilter, string[] | null> = {
+  todo: ['route_review', 'content_review'],
+  sending: ['scheduled', 'opened'],
+  done: ['sent', 'failed', 'read_no_reply', 'blocked'],
+  all: null,
+}
+const filterLabel: Record<ListFilter, string> = { todo: '待我处理', sending: '待发送', done: '已结束', all: '全部' }
+const steps = ['选路线', '审文案', '去发送', '记结果']
+const stepIndex: Record<string, number> = { route_review: 0, content_review: 1, scheduled: 2, opened: 2, sent: 3, failed: 3, read_no_reply: 4, blocked: 4 }
+
+function localNow(): string {
+  const now = new Date()
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`
+}
+
+function formatWhen(value?: string): string {
+  if (!value) return '未设置时间'
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
 function App() {
   const [runs, setRuns] = useState<Run[]>([])
   const [queue, setQueue] = useState<Run[]>([])
   const [riskEvents, setRiskEvents] = useState<RiskEvent[]>([])
   const [view, setView] = useState<View>('workflow')
+  const [filter, setFilter] = useState<ListFilter>('todo')
+  const [showForm, setShowForm] = useState(false)
+  const [showMore, setShowMore] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [summary, setSummary] = useState<Summary | null>(null)
   const [shopName, setShopName] = useState('')
@@ -91,8 +130,21 @@ function App() {
   const [resultNote, setResultNote] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  // When "send now" was pressed for a run, so we can ask after two minutes.
+  const [sendStartedAt, setSendStartedAt] = useState<Record<string, number>>({})
+  const [clock, setClock] = useState(() => Date.now())
 
   const selected = useMemo(() => runs.find((run) => run.id === selectedId) || null, [runs, selectedId])
+  const counts = useMemo(() => {
+    const result = { todo: 0, sending: 0, done: 0, all: runs.length } as Record<ListFilter, number>
+    for (const run of runs) for (const key of ['todo', 'sending', 'done'] as ListFilter[]) if (filterStages[key]!.includes(run.stage)) result[key] += 1
+    return result
+  }, [runs])
+  const visibleRuns = useMemo(() => {
+    const stages = filterStages[filter]
+    return stages ? runs.filter((run) => stages.includes(run.stage)) : runs
+  }, [runs, filter])
 
   const refresh = async () => {
     const [nextRuns, nextQueue, nextSummary, nextRiskEvents] = await Promise.all([
@@ -105,7 +157,10 @@ function App() {
     setQueue(nextQueue)
     setSummary(nextSummary)
     setRiskEvents(nextRiskEvents)
-    if (!selectedId && nextRuns[0]) setSelectedId(nextRuns[0].id)
+    if (!selectedId) {
+      const firstTodo = nextRuns.find((run) => filterStages.todo!.includes(run.stage)) || nextRuns.find((run) => filterStages.sending!.includes(run.stage)) || nextRuns[0]
+      if (firstTodo) setSelectedId(firstTodo.id)
+    }
   }
 
   useEffect(() => {
@@ -118,7 +173,12 @@ function App() {
     setResultNote('')
   }, [selectedId, selected?.state.draft, selected?.state.scheduled_for])
 
-  const runAction = async (action: () => Promise<Run>) => {
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock(Date.now()), 15000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  const runAction = async (action: () => Promise<Run>): Promise<Run | null> => {
     setBusy(true)
     setError('')
     try {
@@ -126,10 +186,27 @@ function App() {
       setRuns((current) => [next, ...current.filter((run) => run.id !== next.id)])
       setSelectedId(next.id)
       await refresh()
+      return next
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '请求未完成')
+      return null
     } finally {
       setBusy(false)
+    }
+  }
+
+  const selectRun = (run: Run) => {
+    setSelectedId(run.id)
+    setShowForm(false)
+    setNotice('')
+  }
+
+  const copyText = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setNotice('文案已复制，可以直接粘贴到小红书')
+    } catch {
+      setNotice('浏览器不允许自动复制，请手动选中文案复制')
     }
   }
 
@@ -149,6 +226,8 @@ function App() {
       setShopNote('')
       setActivityNote('')
       setPurchaseSignalNote('')
+      setShowForm(false)
+      setFilter('todo')
       return next
     })
   }
@@ -162,21 +241,65 @@ function App() {
     }))
   }
 
-  const decideContent = (approved: boolean) => {
+  const submitContent = (run: Run, approved: boolean, when: string) => api<Run>(`/api/runs/${run.id}/content`, {
+    method: 'POST',
+    headers: { 'Idempotency-Key': `content-${run.id}-${approved}-${keyPart(draft)}-${keyPart(when)}` },
+    body: JSON.stringify({ approved, edited_text: draft, scheduled_for: when || null }),
+  })
+
+  const markOpened = (run: Run) => api<Run>(`/api/runs/${run.id}/open`, {
+    method: 'POST',
+    headers: { 'Idempotency-Key': `open-${run.id}` },
+  })
+
+  const rejectContent = () => {
     if (!selected) return
-    void runAction(() => api<Run>(`/api/runs/${selected.id}/content`, {
-      method: 'POST',
-      headers: { 'Idempotency-Key': `content-${selected.id}-${approved}-${keyPart(draft)}-${keyPart(scheduledFor)}` },
-      body: JSON.stringify({ approved, edited_text: draft, scheduled_for: scheduledFor || null }),
-    }))
+    if (!window.confirm('确定驳回这条文案吗？驳回后这条任务结束，不会联系这家店铺。')) return
+    void runAction(() => submitContent(selected, false, ''))
   }
 
-  const recordResult = (result: 'sent' | 'failed' | 'read_no_reply') => {
+  const scheduleLater = async () => {
     if (!selected) return
+    const next = await runAction(() => submitContent(selected, true, scheduledFor))
+    if (next) setFilter('sending')
+  }
+
+  // The system never sends. "Send now" approves the text, copies it, opens the
+  // shop page if we have its address, and then waits for the human to confirm.
+  const beginSending = async (run: Run, text: string) => {
+    await copyText(text)
+    if (run.state.profile_url) window.open(run.state.profile_url, '_blank', 'noopener,noreferrer')
+    setSendStartedAt((current) => ({ ...current, [run.id]: Date.now() }))
+    setClock(Date.now())
+    setFilter('sending')
+  }
+
+  const sendNow = async () => {
+    if (!selected) return
+    const text = draft
+    const run = selected
+    const next = await runAction(async () => {
+      const approved = await submitContent(run, true, localNow())
+      if (approved.stage !== 'scheduled') return approved
+      return markOpened(approved)
+    })
+    if (next?.stage === 'opened') await beginSending(next, text)
+  }
+
+  const startScheduled = async () => {
+    if (!selected) return
+    const run = selected
+    const next = await runAction(() => markOpened(run))
+    if (next?.stage === 'opened') await beginSending(next, next.state.draft || '')
+  }
+
+  const recordResult = (result: 'sent' | 'failed' | 'read_no_reply', fallbackNote = '') => {
+    if (!selected) return
+    const note = resultNote.trim() || fallbackNote
     void runAction(() => api<Run>(`/api/runs/${selected.id}/result`, {
       method: 'POST',
-      headers: { 'Idempotency-Key': `result-${selected.id}-${result}-${keyPart(resultNote)}` },
-      body: JSON.stringify({ result, note: resultNote || null }),
+      headers: { 'Idempotency-Key': `result-${selected.id}-${result}-${keyPart(note)}` },
+      body: JSON.stringify({ result, note: note || null }),
     }))
   }
 
@@ -191,24 +314,27 @@ function App() {
   }
 
   const openStages = ['route_review', 'content_review', 'scheduled', 'opened']
-  const reviewStages = ['route_review', 'content_review']
-
-  const openOfficialPage = () => {
-    if (!selected) return
-    if (selected.state.profile_url) window.open(selected.state.profile_url, '_blank', 'noopener,noreferrer')
-    void runAction(() => api<Run>(`/api/runs/${selected.id}/open`, {
-      method: 'POST',
-      headers: { 'Idempotency-Key': `open-${selected.id}` },
-    }))
+  const frozen = summary?.status === 'frozen'
+  const listHint = (run: Run) => {
+    if (run.stage === 'route_review') return run.state.model_status === 'failed' ? '模型调用失败，需人工选路线' : `模型建议：${channelLabel[run.state.suggested_channel || 'none']}`
+    if (run.stage === 'scheduled') return `${channelLabel[run.state.channel || 'none']} · 提醒时间 ${formatWhen(run.state.scheduled_for)}`
+    return channelLabel[run.state.channel || run.state.suggested_channel || ''] || '待定'
   }
-
-  const channelLabel: Record<string, string> = { dm: '私信', comment: '评论', none: '暂不触达' }
-  const suggestionText = (run: Run) => run.state.model_status === 'failed' ? '模型调用失败' : channelLabel[run.state.channel || run.state.suggested_channel || ''] || '待定'
-
-  const stageLabel: Record<string, string> = {
-    route_review: '路线审核', content_review: '文案审核', scheduled: '待人工打开', opened: '页面已打开', sent: '已发送',
-    failed: '发送异常', read_no_reply: '已读无回复', blocked: '已拦截',
-  }
+  const minutesSending = selected && sendStartedAt[selected.id] ? Math.floor((clock - sendStartedAt[selected.id]) / 60000) : null
+  const modelDetail = selected?.state.model_status === 'succeeded' ? <div className="model-detail">
+    {selected.state.model_summary && <div><span>店铺判断</span><p>{selected.state.model_summary}</p></div>}
+    {!!selected.state.model_points?.length && <div><span>个性化依据</span><ul>{selected.state.model_points.map((point) => <li key={point.evidence_ref + point.text}>{point.text}<em>{point.evidence_ref}</em></li>)}</ul></div>}
+    {!!selected.state.model_product_match?.length && <div><span>产品匹配点</span><ul>{selected.state.model_product_match.map((item) => <li key={item}>{item}</li>)}</ul></div>}
+    {!!selected.state.model_uncertainties?.length && <div><span>模型不确定的地方</span><ul>{selected.state.model_uncertainties.map((item) => <li key={item}>{item}</li>)}</ul></div>}
+    {!!selected.state.model_quality_flags?.length && <div><span>风险提示</span><ul>{selected.state.model_quality_flags.map((item) => <li key={item}>{item}</li>)}</ul></div>}
+    {!!selected.state.evidence?.length && <div><span>模型看到的证据</span><ul>{selected.state.evidence.map((item) => <li key={item}>{item}</li>)}</ul></div>}
+    {selected.state.model_meta && <small className="muted">{selected.state.model_meta.provider} · {selected.state.model_meta.model} · {selected.state.model_meta.prompt_version} · {selected.state.model_meta.latency_ms} ms</small>}
+  </div> : null
+  // The approved text stays visible in every later stage.
+  const finalText = selected && selected.state.draft && !['route_review', 'content_review'].includes(selected.stage) ? <div className="final-text">
+    <div className="final-text-head"><span>{selected.state.channel === 'dm' ? '私信文案' : '评论文案'}</span><button className="secondary-button small" type="button" onClick={() => void copyText(selected.state.draft || '')}><Copy size={13} />复制文案</button></div>
+    <p>{selected.state.draft}</p>
+  </div> : null
 
   return (
     <div className="app-shell">
@@ -217,8 +343,8 @@ function App() {
         <div className="brand-copy"><span>local agent</span><strong>运营工作台</strong></div>
         <nav>
           <button className={`nav-item ${view === 'screening' ? 'active' : ''}`} type="button" onClick={() => setView('screening')}><Images size={16} />批量初筛</button>
-          <button className={`nav-item ${view === 'workflow' ? 'active' : ''}`} type="button" onClick={() => setView('workflow')}><Inbox size={16} />候选工作流</button>
-          <button className={`nav-item ${view === 'queue' ? 'active' : ''}`} type="button" onClick={() => setView('queue')}><Clock3 size={16} />定时队列</button>
+          <button className={`nav-item ${view === 'workflow' ? 'active' : ''}`} type="button" onClick={() => setView('workflow')}><Inbox size={16} />候选工作流{counts.todo > 0 && <span className="nav-count">{counts.todo}</span>}</button>
+          <button className={`nav-item ${view === 'queue' ? 'active' : ''}`} type="button" onClick={() => setView('queue')}><Clock3 size={16} />待发送{queue.length > 0 && <span className="nav-count">{queue.length}</span>}</button>
           <button className={`nav-item ${view === 'risk' ? 'active' : ''}`} type="button" onClick={() => setView('risk')}><FileText size={16} />风险记录</button>
         </nav>
         <div className="sidebar-footer"><CircleDot size={12} /><span>本地模式</span><small>发送由人工完成</small></div>
@@ -226,88 +352,155 @@ function App() {
 
       <main className="main-content">
         <header className="topbar">
-          <div><p className="eyebrow">XIAOHONGSHU / PERSONAL</p><h1>{view === 'screening' ? '批量初筛' : view === 'workflow' ? '候选工作流' : view === 'queue' ? '定时队列' : '风险记录'}</h1></div>
+          <div><p className="eyebrow">XIAOHONGSHU / PERSONAL</p><h1>{view === 'screening' ? '批量初筛' : view === 'workflow' ? '候选工作流' : view === 'queue' ? '待发送' : '风险记录'}</h1></div>
           <div className="quota-strip">
-            <div><span>私信</span><strong>{summary ? `${summary.dm.used}/${summary.dm.limit}` : '--'}</strong></div>
-            <div><span>评论</span><strong>{summary ? `${summary.comment.used}/${summary.comment.limit}` : '--'}</strong></div>
-            <div className="health"><span className={`status-dot ${summary?.status === 'frozen' ? 'danger-dot' : ''}`}></span>{summary?.status === 'frozen' ? '队列冻结' : '账号正常'}</div>
+            <div><span>今日私信</span><strong>{summary ? `${summary.dm.used}/${summary.dm.limit}` : '--'}</strong></div>
+            <div><span>今日评论</span><strong>{summary ? `${summary.comment.used}/${summary.comment.limit}` : '--'}</strong></div>
+            <div className="health"><span className={`status-dot ${frozen ? 'danger-dot' : ''}`}></span>{frozen ? '队列冻结' : '账号正常'}</div>
             <button className="icon-button" title="刷新数据" type="button" onClick={() => refresh().catch((cause: Error) => setError(cause.message))}><RefreshCw size={15} /></button>
           </div>
         </header>
 
         {error && <div className="alert error"><AlertTriangle size={15} />{error}<button className="alert-close" type="button" onClick={() => setError('')}><X size={14} /></button></div>}
+        {notice && <div className="alert ok"><Check size={15} />{notice}<button className="alert-close" type="button" onClick={() => setNotice('')}><X size={14} /></button></div>}
 
-        {view === 'screening' && <ScreeningView onOpenWorkflow={() => { setView('workflow'); refresh().catch((cause: Error) => setError(cause.message)) }} />}
-        {view === 'workflow' && <div className="workspace-grid">
-          <div className="flow-column">
-            <section className="panel">
-              <div className="panel-heading"><div><p className="section-kicker">NEW QUALIFICATION</p><h2>加入候选店铺</h2></div><span className="badge neutral">Agent 评选</span></div>
-              <div className="form-grid">
-                <label>店铺名称<input value={shopName} onChange={(event) => setShopName(event.target.value)} placeholder="例如：上海某某西装定制" /></label>
-                <label>主页地址（可选）<input value={profileUrl} onChange={(event) => setProfileUrl(event.target.value)} placeholder="用于识别同一店铺" /></label>
-                <label>联系依据<select value={contactBasis} onChange={(event) => setContactBasis(event.target.value as ContactBasis)}><option value="cold_outreach">首次陌生联系</option><option value="prior_conversation">已有真实交流</option><option value="inbound_inquiry">对方主动咨询</option><option value="explicit_permission">对方明确同意商务联系</option></select></label>
-                <label>联系依据备注（可选）<input value={contactBasisNote} onChange={(event) => setContactBasisNote(event.target.value)} placeholder="例如：此前在评论区交流过；留空则以模型引用的证据为依据" /></label>
-                <label>店铺类型<select value={shopType} onChange={(event) => setShopType(event.target.value as ShopType)}><option value="suit_custom">西装定制店</option><option value="menswear">成衣品牌 / 男装店</option><option value="apparel_studio">服装工作室</option><option value="content_creator">内容博主</option><option value="staff_account">店员个人号</option><option value="hobbyist">个人爱好者</option><option value="supplier">上游供应商</option><option value="other">其他（与服装无关）</option></select></label>
-                <label>活跃情况（可选）<input value={activityNote} onChange={(event) => setActivityNote(event.target.value)} placeholder="例如：近30天发布8条" /></label>
-                <label>店铺情况<textarea rows={2} value={shopNote} onChange={(event) => setShopNote(event.target.value)} placeholder="主页简介、定位、客单价、主营品类" /></label>
-                <label>采购信号（可选）<textarea rows={2} value={purchaseSignalNote} onChange={(event) => setPurchaseSignalNote(event.target.value)} placeholder="例如：近期在发内搭、针织相关内容" /></label>
-                <label>当前笔记或视频内容<textarea rows={3} value={videoText} onChange={(event) => setVideoText(event.target.value)} placeholder="粘贴公开内容，模型只能依据这里填写的事实" /></label>
-              </div>
-              <button className="primary-button full" type="button" disabled={busy || !shopName.trim() || !videoText.trim()} onClick={createRun}><UserRound size={15} />{busy ? '模型分析中…' : '开始评选'}</button>
-            </section>
+        {view === 'screening' && <ScreeningView onOpenWorkflow={() => { setView('workflow'); setFilter('todo'); refresh().catch((cause: Error) => setError(cause.message)) }} />}
 
-            <section className="panel">
-              <div className="panel-heading"><div><p className="section-kicker">QUEUE</p><h2>工作流队列</h2></div><span className="badge neutral">{runs.length} 条</span></div>
-              <div className="run-list">
-                {runs.length === 0 && <p className="muted">暂无候选工作流</p>}
-                {runs.map((run) => <button className={`run-row ${run.id === selectedId ? 'selected' : ''}`} type="button" key={run.id} onClick={() => setSelectedId(run.id)}>
-                  <span className="run-avatar"><MessageCircle size={15} /></span><span className="run-copy"><strong>{run.state.shop_name}</strong><small>{suggestionText(run)}</small></span><span className={`badge ${run.stage === 'read_no_reply' ? 'warning' : run.stage === 'blocked' ? 'danger' : 'success'}`}>{stageLabel[run.stage] || run.stage}</span>
-                </button>)}
-              </div>
-            </section>
-          </div>
-
-          <section className="panel decision-panel">
-            <div className="panel-heading"><div><p className="section-kicker">HUMAN REVIEW</p><h2>{selected ? selected.state.shop_name : '选择一条工作流'}</h2></div>{selected && <span className="badge warning">{stageLabel[selected.stage] || selected.stage}</span>}</div>
-            {!selected && <div className="empty-state"><PauseCircle size={30} /><p>工作流完成评选后，会在这里进入人工审核。</p></div>}
-            {selected && openStages.includes(selected.stage) && <div className="end-bar"><span>{reviewStages.includes(selected.stage) ? '这条任务正在等你处理。48 小时内不处理，系统会自动结束它。' : '这条任务还没有完成。不想继续时可以手动结束，当日配额会释放。'}</span><button className="secondary-button" type="button" disabled={busy} onClick={endRun}><X size={14} />结束任务</button></div>}
-            {selected && selected.stage === 'route_review' && <div className="decision-content">
-              <div className="recommendation"><ShieldCheck size={18} /><div><span>模型建议</span><strong>{selected.state.model_status === 'failed' ? '模型调用失败' : channelLabel[selected.state.suggested_channel || 'none']}</strong><p>{selected.state.model_status === 'failed' ? selected.state.model_error : selected.state.model_route_reason || '请确认本次触达方式。'}</p></div></div>
-              {selected.state.model_status === 'succeeded' && <div className="model-detail">
-                {selected.state.model_summary && <div><span>店铺判断</span><p>{selected.state.model_summary}</p></div>}
-                {!!selected.state.model_points?.length && <div><span>个性化依据</span><ul>{selected.state.model_points.map((point) => <li key={point.evidence_ref + point.text}>{point.text}<em>{point.evidence_ref}</em></li>)}</ul></div>}
-                {!!selected.state.model_product_match?.length && <div><span>产品匹配点</span><ul>{selected.state.model_product_match.map((item) => <li key={item}>{item}</li>)}</ul></div>}
-                {!!selected.state.model_uncertainties?.length && <div><span>模型不确定的地方</span><ul>{selected.state.model_uncertainties.map((item) => <li key={item}>{item}</li>)}</ul></div>}
-                {!!selected.state.model_quality_flags?.length && <div><span>风险提示</span><ul>{selected.state.model_quality_flags.map((item) => <li key={item}>{item}</li>)}</ul></div>}
-                {!!selected.state.evidence?.length && <div><span>模型看到的证据</span><ul>{selected.state.evidence.map((item) => <li key={item}>{item}</li>)}</ul></div>}
-                {selected.state.model_meta && <small className="muted">{selected.state.model_meta.provider} · {selected.state.model_meta.model} · {selected.state.model_meta.prompt_version} · {selected.state.model_meta.latency_ms} ms</small>}
-              </div>}
-              <div className="choice-group">
-                {(['dm', 'comment'] as Channel[]).map((channel) => <button className="choice" type="button" key={channel} disabled={busy} onClick={() => decideRoute(channel)}>{channel === 'dm' ? <Send size={16} /> : <MessageCircle size={16} />}<span>{channelLabel[channel]}{selected.state.suggested_channel === channel ? '（模型建议）' : ''}</span><small>{selected.state.model_route === channel ? '使用模型草稿，进入文案审核' : '模型按这条路线重新生成草稿，约需 10 秒'}</small></button>)}
-                <button className="choice danger" type="button" disabled={busy} onClick={() => decideRoute('none')}><X size={16} /><span>暂不触达{selected.state.suggested_channel === 'none' && selected.state.model_status === 'succeeded' ? '（模型建议）' : ''}</span><small>结束当前工作流</small></button>
-              </div>
-            </div>}
-            {selected && selected.stage === 'content_review' && <div className="decision-content"><div className="channel-label">{selected.state.channel === 'dm' ? <Send size={15} /> : <MessageCircle size={15} />} {selected.state.channel === 'dm' ? '私信文案' : '当前视频评论'}</div><textarea className="draft-editor" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="模型没有生成草稿，请人工撰写" /><div className="risk-row"><ShieldCheck size={14} />{selected.state.model_route === selected.state.channel ? '草稿由模型生成，已通过策略检查，仍需人工确认内容。' : (draft ? '人工改了路线，模型已按新路线重新生成草稿，仍需人工确认内容。' : (selected.state.model_error || '模型没有生成草稿，请人工撰写；提交时仍会做策略检查。'))}</div>{selected.state.model_route === selected.state.channel && !!selected.state.model_points?.length && <div className="model-detail"><div><span>草稿引用的依据</span><ul>{selected.state.model_points.map((point) => <li key={point.evidence_ref + point.text}>{point.text}<em>{point.evidence_ref}</em></li>)}</ul></div></div>}<label className="schedule-field">定时提醒时间<input type="datetime-local" value={scheduledFor} onChange={(event) => setScheduledFor(event.target.value)} /></label><div className="button-row"><button className="secondary-button" type="button" disabled={busy} onClick={() => decideContent(false)}><X size={14} />驳回</button><button className="primary-button" type="button" disabled={busy || !draft.trim()} onClick={() => decideContent(true)}><Check size={14} />加入定时队列</button></div></div>}
-            {selected && selected.stage === 'scheduled' && <div className="decision-content scheduled-state"><div className="success-icon"><Clock3 size={22} /></div><p>已加入人工发送队列</p><small>{selected.state.scheduled_for || '等待人工操作'}</small><button className="primary-button full" type="button" disabled={busy || summary?.status === 'frozen'} onClick={openOfficialPage}><Send size={15} />打开官方页面并记录</button></div>}
-            {selected && selected.stage === 'opened' && <div className="decision-content scheduled-state"><div className="success-icon"><Send size={22} /></div><p>已记录打开官方页面</p><small>请在官方页面完成人工发送后再确认结果。</small><label>发送记录备注<input value={resultNote} onChange={(event) => setResultNote(event.target.value)} placeholder="可记录官方页面操作结果" /></label><button className="primary-button full" type="button" disabled={busy || summary?.status === 'frozen'} onClick={() => recordResult('sent')}><Check size={15} />确认已人工发送</button></div>}
-            {selected && selected.stage === 'sent' && <div className="decision-content scheduled-state"><div className="success-icon"><Send size={22} /></div><p>已记录人工发送</p><small>若对方已读但在观察期内未回复，可终止后续触达。</small><label>结果备注<input value={resultNote} onChange={(event) => setResultNote(event.target.value)} placeholder="例如：已读超过观察期，未回复" /></label><div className="button-row"><button className="secondary-button" type="button" disabled={busy} onClick={() => recordResult('failed')}><AlertTriangle size={14} />记录异常</button><button className="primary-button" type="button" disabled={busy || !resultNote.trim()} onClick={() => recordResult('read_no_reply')}><ShieldCheck size={14} />标记已读无回复</button></div></div>}
-            {selected && selected.stage === 'read_no_reply' && <div className="empty-state blocked-state"><ShieldCheck size={30} /><strong>已加入勿扰名单</strong><p>该店铺不会再进入后续评选，也不会创建新的触达任务。</p><small>{selected.state.result_note || '人工确认：已读无回复'}</small></div>}
-            {selected && (selected.stage === 'failed' || selected.stage === 'blocked') && <div className="empty-state blocked-state"><AlertTriangle size={30} /><strong>{selected.stage === 'failed' ? '已记录发送异常' : (selected.state.result_note ? '任务已结束，不会联系这家店铺' : '当前任务已拦截')}</strong><p>{selected.state.result_note || '请检查风险记录和账号状态。'}</p></div>}
+        {view === 'workflow' && <div className="master-detail">
+          <section className="panel list-panel">
+            <div className="list-head">
+              <div className="tabs">{(['todo', 'sending', 'done', 'all'] as ListFilter[]).map((key) => <button type="button" key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}>{filterLabel[key]}<em>{counts[key]}</em></button>)}</div>
+              <button className="secondary-button small" type="button" onClick={() => { setShowForm(true); setNotice('') }}><Plus size={13} />手动添加</button>
+            </div>
+            <div className="run-list">
+              {visibleRuns.length === 0 && <p className="muted list-empty">{filter === 'todo' ? '没有等你处理的任务。可以去“批量初筛”上传截图，或点“手动添加”。' : '这一类目前没有任务。'}</p>}
+              {visibleRuns.map((run) => <button className={`run-row ${run.id === selectedId && !showForm ? 'selected' : ''}`} type="button" key={run.id} onClick={() => selectRun(run)}>
+                <span className="run-avatar">{(run.state.channel || run.state.suggested_channel) === 'comment' ? <MessageCircle size={15} /> : <Send size={15} />}</span>
+                <span className="run-copy"><strong>{run.state.shop_name}</strong><small>{listHint(run)}</small></span>
+                <span className={`badge ${stageBadge[run.stage] || 'neutral'}`}>{stageLabel[run.stage] || run.stage}</span>
+              </button>)}
+            </div>
           </section>
+
+          {showForm && <section className="panel detail-panel">
+            <div className="panel-heading"><div><p className="section-kicker">MANUAL ENTRY</p><h2>手动添加一家店铺</h2></div><button className="icon-button" type="button" title="关闭" onClick={() => setShowForm(false)}><X size={15} /></button></div>
+            <p className="muted form-hint">没有截图时用这里。带 <b className="req">*</b> 的必填，其余越具体，草稿越有针对性。</p>
+            <div className="form-grid">
+              <label>店铺名称 <b className="req">*</b><input value={shopName} onChange={(event) => setShopName(event.target.value)} placeholder="例如：上海某某西装定制" /></label>
+              <label>当前笔记或视频内容 <b className="req">*</b><textarea rows={3} value={videoText} onChange={(event) => setVideoText(event.target.value)} placeholder="粘贴对方公开发布的内容，模型只能依据这里填写的事实" /></label>
+              <label>店铺情况<textarea rows={2} value={shopNote} onChange={(event) => setShopNote(event.target.value)} placeholder="主页简介、定位、客单价、主营品类" /></label>
+              <div className="form-two">
+                <label>店铺类型<select value={shopType} onChange={(event) => setShopType(event.target.value as ShopType)}><option value="suit_custom">西装定制店</option><option value="menswear">成衣品牌 / 男装店</option><option value="apparel_studio">服装工作室</option><option value="content_creator">内容博主</option><option value="staff_account">店员个人号</option><option value="hobbyist">个人爱好者</option><option value="supplier">上游供应商</option><option value="other">其他（与服装无关）</option></select></label>
+                <label>联系依据<select value={contactBasis} onChange={(event) => setContactBasis(event.target.value as ContactBasis)}><option value="cold_outreach">首次陌生联系</option><option value="prior_conversation">已有真实交流</option><option value="inbound_inquiry">对方主动咨询</option><option value="explicit_permission">对方明确同意商务联系</option></select></label>
+              </div>
+              <button className="link-button" type="button" onClick={() => setShowMore((current) => !current)}><ChevronDown size={13} className={showMore ? 'flip' : ''} />{showMore ? '收起选填项' : '更多选填项（主页地址、活跃情况、内搭相关信号、依据备注）'}</button>
+              {showMore && <>
+                <label>主页地址<input value={profileUrl} onChange={(event) => setProfileUrl(event.target.value)} placeholder="填了之后，发送时可以一键打开对方主页" /></label>
+                <label>活跃情况<input value={activityNote} onChange={(event) => setActivityNote(event.target.value)} placeholder="例如：近30天发布8条" /></label>
+                <label>内搭相关信号<textarea rows={2} value={purchaseSignalNote} onChange={(event) => setPurchaseSignalNote(event.target.value)} placeholder="例如：近期在发衬衫、针织、内搭搭配的内容" /></label>
+                <label>联系依据备注<input value={contactBasisNote} onChange={(event) => setContactBasisNote(event.target.value)} placeholder="例如：此前在评论区交流过；留空则以模型引用的证据为依据" /></label>
+              </>}
+            </div>
+            <div className="button-row">
+              {(!shopName.trim() || !videoText.trim()) && <span className="muted">还需填写：{[!shopName.trim() && '店铺名称', !videoText.trim() && '笔记或视频内容'].filter(Boolean).join('、')}</span>}
+              <button className="primary-button" type="button" disabled={busy || !shopName.trim() || !videoText.trim()} onClick={createRun}><UserRound size={15} />{busy ? '模型分析中，约 10 秒…' : '开始评选'}</button>
+            </div>
+          </section>}
+
+          {!showForm && <section className="panel detail-panel">
+            {!selected && <div className="empty-state"><PauseCircle size={30} /><p>从左边选一条任务，这里会显示它的建议、文案和下一步操作。</p></div>}
+            {selected && <>
+              <div className="panel-heading">
+                <div><p className="section-kicker">{channelLabel[selected.state.channel || selected.state.suggested_channel || ''] || '待定'}</p><h2>{selected.state.shop_name}</h2></div>
+                <span className={`badge ${stageBadge[selected.stage] || 'neutral'}`}>{stageLabel[selected.stage] || selected.stage}</span>
+              </div>
+              <ol className="stepper">{steps.map((label, index) => <li key={label} className={index < (stepIndex[selected.stage] ?? 0) ? 'done' : index === stepIndex[selected.stage] ? 'current' : ''}><span>{index < (stepIndex[selected.stage] ?? 0) ? <Check size={11} /> : index + 1}</span>{label}</li>)}</ol>
+
+              {selected.stage === 'route_review' && <div className="decision-content">
+                <div className="recommendation"><ShieldCheck size={18} /><div><span>模型建议</span><strong>{selected.state.model_status === 'failed' ? '模型调用失败' : channelLabel[selected.state.suggested_channel || 'none']}</strong><p>{selected.state.model_status === 'failed' ? selected.state.model_error : selected.state.model_route_reason || '请确认本次触达方式。'}</p></div></div>
+                <div className="choice-group">
+                  {(['dm', 'comment'] as Channel[]).map((channel) => <button className={`choice ${selected.state.suggested_channel === channel ? 'suggested' : ''}`} type="button" key={channel} disabled={busy} onClick={() => decideRoute(channel)}>{channel === 'dm' ? <Send size={16} /> : <MessageCircle size={16} />}<span>{channelLabel[channel]}{selected.state.suggested_channel === channel ? '（模型建议）' : ''}</span><small>{busy ? '处理中…' : selected.state.model_route === channel ? '使用模型草稿，进入文案审核' : '按这条路线重新生成草稿，约 10 秒'}</small></button>)}
+                  <button className="choice danger" type="button" disabled={busy} onClick={() => decideRoute('none')}><X size={16} /><span>暂不触达{selected.state.suggested_channel === 'none' && selected.state.model_status === 'succeeded' ? '（模型建议）' : ''}</span><small>结束这条任务</small></button>
+                </div>
+                {modelDetail}
+              </div>}
+
+              {selected.stage === 'content_review' && <div className="decision-content">
+                <label className="draft-label">{selected.state.channel === 'dm' ? '私信文案' : '评论文案'}（可直接修改）<textarea className="draft-editor" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="模型没有生成草稿，请人工撰写" /></label>
+                <div className="risk-row"><ShieldCheck size={14} />{selected.state.model_route === selected.state.channel ? '草稿由模型生成，已通过策略检查。提交时会对你改过的文案再检查一次。' : (draft ? '你改了路线，模型已按新路线重新生成草稿。提交时会再做策略检查。' : (selected.state.model_error || '模型没有生成草稿，请人工撰写；提交时会做策略检查。'))}<span className="char-count">{draft.length} 字</span></div>
+                <div className="send-options">
+                  <div className="send-option primary">
+                    <strong>现在就去发</strong>
+                    <p>文案会自动复制{selected.state.profile_url ? '并打开对方主页' : '，请在小红书里找到这家店'}，你粘贴发送后回来确认结果。</p>
+                    <button className="primary-button" type="button" disabled={busy || !draft.trim() || frozen} onClick={() => void sendNow()}><Send size={14} />通过并现在去发</button>
+                  </div>
+                  <div className="send-option">
+                    <strong>晚点再发</strong>
+                    <p>到时间只提醒你，系统不会自动发送。</p>
+                    <div className="inline-row"><input type="datetime-local" value={scheduledFor} min={localNow()} onChange={(event) => setScheduledFor(event.target.value)} /><button className="secondary-button" type="button" disabled={busy || !draft.trim() || !scheduledFor} onClick={() => void scheduleLater()}><Clock3 size={14} />定时提醒</button></div>
+                  </div>
+                </div>
+                {!draft.trim() && <p className="muted">文案为空，不能提交。</p>}
+                {frozen && <p className="muted">账号处于冻结状态，暂时不能发送。</p>}
+                <details className="more-detail"><summary>查看模型依据</summary>{modelDetail || <p className="muted">这条任务没有模型依据。</p>}</details>
+              </div>}
+
+              {selected.stage === 'scheduled' && <div className="decision-content">
+                <div className="status-card info"><Clock3 size={18} /><div><strong>等你去发送</strong><p>提醒时间：{formatWhen(selected.state.scheduled_for)}。系统不会自动发送。</p></div></div>
+                {finalText}
+                <button className="primary-button full" type="button" disabled={busy || frozen} onClick={() => void startScheduled()}><Send size={15} />复制文案并现在去发</button>
+              </div>}
+
+              {selected.stage === 'opened' && <div className="decision-content">
+                <div className={`status-card ${minutesSending !== null && minutesSending >= 2 ? 'warn' : 'info'}`}><Send size={18} /><div><strong>{minutesSending !== null && minutesSending >= 2 ? `已经过去 ${minutesSending} 分钟，发送成功了吗？` : '发送成功了吗？'}</strong><p>请在小红书里把文案发出去，然后回来点下面的按钮。{selected.state.profile_url ? '' : '这条任务没有主页地址，需要你在小红书里手动找到这家店。'}</p></div></div>
+                {finalText}
+                <label>备注（可选）<input value={resultNote} onChange={(event) => setResultNote(event.target.value)} placeholder="例如：提示对方未关注，只能发一条" /></label>
+                <div className="button-row spread">
+                  <button className="secondary-button" type="button" disabled={busy} onClick={() => recordResult('failed', '人工反馈：没有发送成功')}><AlertTriangle size={14} />没发成功</button>
+                  <button className="primary-button" type="button" disabled={busy || frozen} onClick={() => recordResult('sent')}><Check size={15} />已发送成功</button>
+                </div>
+              </div>}
+
+              {selected.stage === 'sent' && <div className="decision-content">
+                <div className="status-card ok"><Check size={18} /><div><strong>已记录发送</strong><p>对方已读但一直没回复时，在这里标记，这家店之后不会再被联系。</p></div></div>
+                {finalText}
+                <label>观察备注 <b className="req">*</b><input value={resultNote} onChange={(event) => setResultNote(event.target.value)} placeholder="例如：已读超过 3 天，未回复" /></label>
+                <div className="button-row spread">
+                  <button className="secondary-button" type="button" disabled={busy} onClick={() => recordResult('failed', '人工反馈：发送后出现异常')}><AlertTriangle size={14} />记录异常</button>
+                  <button className="primary-button" type="button" disabled={busy || !resultNote.trim()} onClick={() => recordResult('read_no_reply')}><ShieldCheck size={14} />标记已读无回复</button>
+                </div>
+              </div>}
+
+              {selected.stage === 'read_no_reply' && <div className="decision-content"><div className="status-card neutral"><ShieldCheck size={18} /><div><strong>已加入勿扰名单</strong><p>这家店不会再进入评选。{selected.state.result_note}</p></div></div>{finalText}</div>}
+              {(selected.stage === 'failed' || selected.stage === 'blocked') && <div className="decision-content"><div className="status-card neutral"><AlertTriangle size={18} /><div><strong>{selected.stage === 'failed' ? '已记录发送异常' : '任务已结束，不会联系这家店铺'}</strong><p>{selected.state.result_note || '被策略检查拦截，详情见“风险记录”。'}</p></div></div>{finalText}</div>}
+
+              {!['route_review', 'content_review'].includes(selected.stage) && modelDetail && <details className="more-detail"><summary>查看模型依据</summary>{modelDetail}</details>}
+              {openStages.includes(selected.stage) && <div className="end-bar"><span>{['route_review', 'content_review'].includes(selected.stage) ? '48 小时内不处理，系统会自动结束这条任务。' : '不想继续时可以结束任务，当日配额会释放。'}</span>{selected.stage === 'content_review' ? <button className="link-button danger" type="button" disabled={busy} onClick={rejectContent}>驳回并结束</button> : <button className="link-button danger" type="button" disabled={busy} onClick={endRun}>结束任务</button>}</div>}
+            </>}
+          </section>}
         </div>}
+
         {view === 'queue' && <section className="panel page-panel">
-          <div className="panel-heading"><div><p className="section-kicker">SCHEDULED OUTREACH</p><h2>人工发送队列</h2></div><span className="badge neutral">{queue.length} 条</span></div>
+          <div className="panel-heading"><div><p className="section-kicker">READY TO SEND</p><h2>等你去发送的文案</h2></div><span className="badge neutral">{queue.length} 条</span></div>
           <div className="queue-table">
-            {queue.length === 0 && <p className="muted">暂无定时任务</p>}
-            {queue.map((run) => <button className="queue-row" type="button" key={run.id} onClick={() => { setSelectedId(run.id); setView('workflow') }}>
-              <span className="run-avatar">{run.state.channel === 'dm' ? <Send size={15} /> : <MessageCircle size={15} />}</span>
-              <span className="run-copy"><strong>{run.state.shop_name}</strong><small>{run.state.channel === 'dm' ? '私信' : '评论'} · {run.state.scheduled_for || '未设置时间'}</small></span>
-              <span className={`badge ${run.stage === 'opened' ? 'success' : 'warning'}`}>{stageLabel[run.stage] || run.stage}</span>
-            </button>)}
+            {queue.length === 0 && <p className="muted">没有待发送的任务。文案审核通过后会出现在这里。</p>}
+            {queue.map((run) => <article className="queue-card" key={run.id}>
+              <header>
+                <span className="run-avatar">{run.state.channel === 'dm' ? <Send size={15} /> : <MessageCircle size={15} />}</span>
+                <span className="run-copy"><strong>{run.state.shop_name}</strong><small>{channelLabel[run.state.channel || 'none']} · 提醒时间 {formatWhen(run.state.scheduled_for)}</small></span>
+                <span className={`badge ${stageBadge[run.stage] || 'neutral'}`}>{stageLabel[run.stage] || run.stage}</span>
+              </header>
+              <p className="queue-text">{run.state.draft || '（没有文案）'}</p>
+              <div className="button-row">
+                <button className="secondary-button small" type="button" onClick={() => void copyText(run.state.draft || '')}><Copy size={13} />复制文案</button>
+                <button className="primary-button small" type="button" onClick={() => { selectRun(run); setFilter('sending'); setView('workflow') }}>去处理</button>
+              </div>
+            </article>)}
           </div>
         </section>}
+
         {view === 'risk' && <section className="panel page-panel">
-          <div className="panel-heading"><div><p className="section-kicker">RISK CENTER</p><h2>风险与账号状态</h2></div><span className={`badge ${summary?.status === 'frozen' ? 'danger' : summary?.status === 'degraded' ? 'warning' : 'success'}`}>{summary?.status === 'frozen' ? '队列冻结' : summary?.status === 'degraded' ? '降级运行' : '账号正常'}</span></div>
+          <div className="panel-heading"><div><p className="section-kicker">RISK CENTER</p><h2>风险与账号状态</h2></div><span className={`badge ${frozen ? 'danger' : summary?.status === 'degraded' ? 'warning' : 'success'}`}>{frozen ? '队列冻结' : summary?.status === 'degraded' ? '降级运行' : '账号正常'}</span></div>
           {summary?.freeze_reason && <div className="risk-banner"><AlertTriangle size={16} /><span>{summary.freeze_reason}</span></div>}
           <div className="risk-list">
             {riskEvents.length === 0 && <p className="muted">暂无风险记录</p>}
