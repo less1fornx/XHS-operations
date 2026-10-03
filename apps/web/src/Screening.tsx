@@ -224,6 +224,8 @@ export default function ScreeningView({ onOpenWorkflow }: { onOpenWorkflow: () =
                 <span className={`badge ${tierBadge[s.tier]}`}>{tierLabel[s.tier]}</span>
               </header>
               <label className="id-row">小红书号{locked ? <span>{e.xhs_id || '未识别'}</span> : <input key={e.xhs_id || ''} defaultValue={e.xhs_id || ''} placeholder="截图里没有，可手动填写" onBlur={(event) => { if (event.target.value.trim() !== (e.xhs_id || '')) void correct(item.shop_key, { xhs_id: event.target.value.trim() }) }} />}</label>
+              {s.tier !== 'excluded' && !e.xhs_id && <p className="unclear">截图里没有识别到小红书号。没有它就无法唯一确认这家店，请对照主页填写（企业号一般在主页右上角“···”或分享里能看到）。</p>}
+              {!!e.xhs_id && !/^[A-Za-z0-9_.-]{4,30}$/.test(e.xhs_id) && <p className="unclear">这个小红书号的格式看起来不对，请对照截图核对。</p>}
               <div className="thumbs">{item.image_paths.map((path) => <a href={imageUrl(path)} target="_blank" rel="noreferrer" key={path}><img src={imageUrl(path)} alt="截图" onError={(event) => { event.currentTarget.replaceWith(Object.assign(document.createElement('span'), { className: 'muted', textContent: '原图已删除' })) }} /></a>)}</div>
               <p className="reasons">{s.tier_reasons.join('；')}</p>
               {Object.keys(s.signals).length > 0 && <div className="signals">
