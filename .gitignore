@@ -15,3 +15,8 @@ data/uploads/
 .DS_Store
 .tmp/
 outputs/*.ndjson
+data/*.sqlite-shm
+data/*.sqlite-wal
+data/*.db-shm
+data/*.db-wal
+data/*.db-journal
