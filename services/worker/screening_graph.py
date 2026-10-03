@@ -31,6 +31,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send, interrupt
 
 from packages.agent_core.screening import (
+    NotShopPageError,
     ShopExtraction,
     assign_routes,
     rank_key,
@@ -60,8 +61,11 @@ ReadShop = Callable[[ShopInput], ShopExtraction]
 
 
 def classify_error(exc: Exception) -> str:
-    """system: network or service trouble, retrying may help.
+    """not_shop_page: the images were read, but they are not a shop profile or notes.
+    system: network or service trouble, retrying may help.
     unreadable: the screenshots themselves could not be turned into facts."""
+    if isinstance(exc, NotShopPageError):
+        return "not_shop_page"
     return "system" if isinstance(exc.__cause__, httpx.HTTPError) else "unreadable"
 
 

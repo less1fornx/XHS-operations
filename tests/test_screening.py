@@ -191,3 +191,24 @@ def test_correcting_shop_type_re_tiers_the_shop() -> None:
     assert before[0]["screening"]["tier"] == "medium"
     assert after[0]["screening"]["tier"] == "high"
     assert after[0]["screening"]["suggested_route"] == "dm"
+
+
+def test_non_shop_images_are_reported_as_not_a_shop_page(tmp_path) -> None:
+    store = make_store(tmp_path)
+    chat = shop(page_kind="other", page_summary="小红书私信对话界面", shop_name="", shop_type="unknown")
+    graph = build_batch_graph(
+        make_read_shop(store, MockShopExtractor({"chat": chat})), lambda name: False, lambda: TODAY
+    )
+    shops = [{"batch_id": "b2", "shop_key": "shop_0", "image_paths": write_images(tmp_path, "chat.jpg")}]
+
+    state = graph.invoke(
+        {"batch_id": "b2", "shops": shops, "dm_slots": 5, "comment_slots": 3, "results": []},
+        {"configurable": {"thread_id": "batch-b2"}},
+    )
+
+    result = state["results"][0]
+    assert result["status"] == "failed"
+    assert result["error_kind"] == "not_shop_page"
+    assert "私信对话" in result["error"]
+    with Session(store.engine) as session:
+        assert session.exec(select(ModelInvocation)).one().status == "succeeded"

@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from packages.agent_core.providers import ProviderResponseError
-from packages.agent_core.screening import ShopExtraction
+from packages.agent_core.screening import NotShopPageError, ShopExtraction
 from packages.agent_core.vision import ShopExtractor, extraction_prompt_sha256
 from services.api.app.storage import RunStore
 from services.worker.screening_graph import ShopInput, classify_error
@@ -57,7 +57,17 @@ def make_read_shop(store: RunStore, extractor: ShopExtractor):
                 usage_json=json.dumps(result.usage, ensure_ascii=False),
                 latency_ms=result.latency_ms,
             )
-            return result.extraction
+            extraction = result.extraction
+            # The model call worked; the pictures are simply not a shop page.
+            if extraction.page_kind == "other":
+                raise NotShopPageError(
+                    f"图片已读取，但不是店铺主页或笔记：{extraction.page_summary or '未识别出内容类型'}"
+                )
+            if not extraction.shop_name.strip():
+                raise NotShopPageError(
+                    f"图片已读取（{extraction.page_summary or '内容可见'}），但里面找不到账号名称，无法确定是哪家店。请补一张主页截图"
+                )
+            return extraction
         raise AssertionError("unreachable")
 
     return read_shop

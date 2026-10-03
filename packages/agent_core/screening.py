@@ -13,7 +13,7 @@ import re
 from datetime import date
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from .contracts import ShopType, StrictModel
 
@@ -32,7 +32,10 @@ SuggestedRoute = Literal["dm", "comment", "none"]
 class ShopExtraction(StrictModel):
     """What the vision model saw. Lists hold verbatim screenshot text, not opinions."""
 
-    shop_name: str = Field(min_length=1, max_length=200)
+    # What the screenshots show. "other" means they are not a shop's profile or notes.
+    page_kind: Literal["profile", "note_list", "note_detail", "other"] = "profile"
+    page_summary: str = Field(default="", max_length=300)
+    shop_name: str = Field(max_length=200)
     account_kind: Literal["enterprise_verified", "personal", "unknown"]
     shop_type: ShopType
     bio_text: str = Field(max_length=2000)
@@ -46,6 +49,15 @@ class ShopExtraction(StrictModel):
     content_topics: list[str] = Field(max_length=20)
     knitwear_present: SignalValue
     unclear_fields: list[str] = Field(max_length=20)
+
+    @field_validator("shop_type", mode="before")
+    @classmethod
+    def unknown_type_is_other(cls, value: object) -> object:
+        return "other" if value == "unknown" else value
+
+
+class NotShopPageError(Exception):
+    """The model read the images fine, but they are not a shop profile or its notes."""
 
 
 class Signal(StrictModel):
@@ -283,6 +295,7 @@ def today_in_shanghai() -> date:
 
 
 __all__ = [
+    "NotShopPageError",
     "MAX_IMAGES_PER_SHOP",
     "MAX_SHOPS_PER_BATCH",
     "SCREENING_RULES_VERSION",

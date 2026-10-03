@@ -34,7 +34,7 @@ type ShopResult = {
   image_paths: string[]
   status: 'read' | 'failed'
   error?: string
-  error_kind?: 'system' | 'unreadable'
+  error_kind?: 'system' | 'unreadable' | 'not_shop_page'
   extraction?: Extraction
   screening?: Screening
   rank?: number
@@ -169,7 +169,7 @@ export default function ScreeningView({ onOpenWorkflow }: { onOpenWorkflow: () =
 
       {!batch && <section className="panel">
         <div className="panel-heading"><div><p className="section-kicker">UPLOAD</p><h2>上传一批店铺截图</h2></div><span className="badge neutral">{filledShops}/{MAX_SHOPS} 家</span></div>
-        <p className="muted">每家店上传 1 到 {MAX_IMAGES} 张截图（主页、笔记列表）。系统只读取截图里看得见的信息，原图在本机保存 10 天后自动删除。</p>
+        <p className="muted">每家店上传 1 到 {MAX_IMAGES} 张截图，其中至少一张是账号主页。支持 JPG、PNG、WebP，单张不超过 10MB；苹果手机相册里的 HEIC 照片不支持，手机截图默认是 PNG，可以直接用。系统只读取截图里看得见的信息，原图在本机保存 10 天后自动删除。</p>
         <div className="slot-list">
           {slots.map((files, index) => <div className="slot-row" key={index}>
             <span className="slot-index">店铺 {index + 1}</span>
@@ -205,7 +205,7 @@ export default function ScreeningView({ onOpenWorkflow }: { onOpenWorkflow: () =
 
         {failed.length > 0 && <div className="failure-box">
           <strong>以下店铺没有读出来，已跳过，不影响其他店：</strong>
-          {failed.map((item) => <p key={item.shop_key}>{item.shop_key.replace('shop_', '店铺 ').replace(/\d+$/, (n) => String(Number(n) + 1))}：{item.error_kind === 'system' ? '服务暂时出错（已自动重试一次），可以稍后重新上传这一家' : '截图无法识别，请确认截的是主页或笔记列表，并重新截图'}<small>{item.error}</small></p>)}
+          {failed.map((item) => <p key={item.shop_key}>{item.shop_key.replace('shop_', '店铺 ').replace(/\d+$/, (n) => String(Number(n) + 1))}：{item.error_kind === 'not_shop_page' ? item.error : item.error_kind === 'system' ? '服务暂时出错（已自动重试一次），可以稍后重新上传这一家' : '模型返回的结果格式不对，没能读出店铺信息，可以重新上传这一家再试一次'}{item.error_kind !== 'not_shop_page' && <small>{item.error}</small>}</p>)}
         </div>}
 
         <div className="shop-cards">
