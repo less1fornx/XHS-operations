@@ -28,16 +28,29 @@ if str(LAB_SOURCE) not in sys.path:
     sys.path.insert(0, str(LAB_SOURCE))
 
 from phase0_graph.lead_workflow import build_graph  # noqa: E402
+from packages.agent_core.providers import provider_from_env  # noqa: E402
+from services.worker.lead_generation import build_suggester, load_product_facts  # noqa: E402
 
 
 Channel = Literal["dm", "comment", "none"]
 ContactBasis = Literal["cold_outreach", "prior_conversation", "inbound_inquiry", "explicit_permission"]
+ShopType = Literal[
+    "suit_custom",
+    "menswear",
+    "apparel_studio",
+    "content_creator",
+    "staff_account",
+    "hobbyist",
+    "supplier",
+    "other",
+]
 RunRecord = dict[str, Any]
 
 app = FastAPI(title="Agent Operations API", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    # Vite picks the next free port when 5173 is taken, so allow any local port.
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -52,9 +65,14 @@ CHECKPOINT_DB_PATH = Path(
 checkpoint_connection = sqlite3.connect(CHECKPOINT_DB_PATH, check_same_thread=False)
 checkpointer = SqliteSaver(checkpoint_connection)
 checkpointer.setup()
-graph = build_graph(checkpointer=checkpointer)
 store = RunStore(RUN_DB_PATH)
+llm_provider = provider_from_env()
+graph = build_graph(
+    checkpointer=checkpointer,
+    suggester=build_suggester(store, llm_provider, load_product_facts()),
+)
 graph_lock = Lock()
+REVIEW_TIMEOUT_HOURS = float(os.getenv("AGENT_REVIEW_TIMEOUT_HOURS", "48"))
 
 
 class RunCreate(BaseModel):
@@ -63,6 +81,11 @@ class RunCreate(BaseModel):
     profile_url: str | None = None
     contact_basis: ContactBasis = "cold_outreach"
     contact_basis_note: str | None = None
+    shop_type: ShopType = "suit_custom"
+    # Pasted profile text can be long; the model input builder trims it.
+    shop_note: str | None = Field(default=None, max_length=20000)
+    activity_note: str | None = Field(default=None, max_length=20000)
+    purchase_signal_note: str | None = Field(default=None, max_length=20000)
 
 
 class RouteDecision(BaseModel):
@@ -73,6 +96,10 @@ class ContentDecision(BaseModel):
     approved: bool
     edited_text: str | None = None
     scheduled_for: str | None = None
+
+
+class EndDecision(BaseModel):
+    reason: str | None = Field(default=None, max_length=500)
 
 
 class ResultDecision(BaseModel):
@@ -175,11 +202,18 @@ def cached_or_none(key: str) -> dict[str, Any] | None:
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "service": "api"}
+    return {
+        "status": "ok",
+        "service": "api",
+        "llm_provider": llm_provider.provider_name,
+        "llm_model": llm_provider.model_name,
+        "review_timeout_hours": str(REVIEW_TIMEOUT_HOURS),
+    }
 
 
 @app.get("/api/runs")
 def list_runs() -> list[dict[str, Any]]:
+    store.expire_stale_reviews(REVIEW_TIMEOUT_HOURS)
     return store.list()
 
 
@@ -237,6 +271,10 @@ def create_run(payload: RunCreate) -> dict[str, Any]:
         "contact_basis": payload.contact_basis,
         "contact_basis_note": payload.contact_basis_note or "",
         "video_text": payload.video_text,
+        "shop_type": payload.shop_type,
+        "shop_note": payload.shop_note or "",
+        "activity_note": payload.activity_note or "",
+        "purchase_signal_note": payload.purchase_signal_note or "",
         "trace": [],
         "route_review_status": "not_started",
         "content_review_status": "not_started",
@@ -270,9 +308,12 @@ def decide_route(
         raise HTTPException(status_code=404, detail="Run not found")
     if record["stage"] != "route_review":
         raise HTTPException(status_code=409, detail="当前工作流不在路线审核阶段")
+    # A DM needs a concrete, recorded basis: either the human's note or the
+    # evidence-backed points the model cited for this shop.
     if payload.requested_channel == "dm" and not (
-        record["state"].get("contact_basis_note") or ""
-    ).strip():
+        (record["state"].get("contact_basis_note") or "").strip()
+        or record["state"].get("model_points")
+    ):
         raise HTTPException(
             status_code=409,
             detail="contact_basis_note_required: 私信必须填写具体店铺、内容或历史交流依据",
@@ -313,6 +354,8 @@ def decide_content(
         raise HTTPException(status_code=409, detail="scheduled_for_required: 加入定时队列必须设置时间")
     if payload.approved:
         validate_schedule(payload.scheduled_for or "")
+        if not (payload.edited_text or record["state"].get("draft") or "").strip():
+            raise HTTPException(status_code=409, detail="draft_required: 文案为空，不能加入定时队列")
 
     reserved = False
     if payload.approved:
@@ -357,6 +400,25 @@ def decide_content(
         if reserved:
             store.release_quota(record["state"]["task_id"], record["state"].get("channel", ""))
         raise
+
+
+@app.post("/api/runs/{run_id}/end")
+def end_run(
+    run_id: str,
+    payload: EndDecision,
+    idempotency_header: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> dict[str, Any]:
+    key = request_key(run_id, "end", payload.model_dump(), idempotency_header)
+    cached = cached_or_none(key)
+    if cached is not None:
+        return cached
+    try:
+        return store.end_run(
+            run_id, (payload.reason or "").strip() or "人工结束任务", idempotency_key=key
+        )
+    except BusinessRuleError as exc:
+        status = 404 if exc.code == "run_not_found" else 409
+        raise HTTPException(status_code=status, detail=f"{exc.code}: {exc.message}") from exc
 
 
 @app.post("/api/runs/{run_id}/open")

@@ -9,8 +9,14 @@ from pydantic import ValidationError
 
 from packages.agent_core.contracts import LeadAgentInput, LeadAgentOutput
 from packages.agent_core.evaluation import load_cases, run_evaluation
-from packages.agent_core.prompting import build_prompt
-from packages.agent_core.providers import MockProvider, QwenProvider
+from packages.agent_core.pipeline import POLICY_GATE_PROVIDER, generate_lead_suggestion
+from packages.agent_core.prompting import PromptBundle, build_prompt
+from packages.agent_core.providers import (
+    GenerationResult,
+    MockProvider,
+    ProviderResponseError,
+    QwenProvider,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +24,22 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 def first_case() -> LeadAgentInput:
     return load_cases(PROJECT_ROOT / "evals" / "phase2_cases.v1.json")[0].input
+
+
+class FailingProvider:
+    """Stands in for a model that must not be reached, or that errors out."""
+
+    provider_name = "failing"
+    model_name = "failing-v1"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def generate(
+        self, agent_input: LeadAgentInput, prompt: PromptBundle
+    ) -> GenerationResult:
+        self.calls += 1
+        raise ProviderResponseError("模拟模型调用失败")
 
 
 def test_reject_output_cannot_include_a_draft() -> None:
@@ -56,9 +78,45 @@ def test_mock_provider_runs_fixed_evaluation_set() -> None:
     cases = load_cases(PROJECT_ROOT / "evals" / "phase2_cases.v1.json")
     report = run_evaluation(cases, MockProvider())
 
-    assert report.summary["total"] == 4
+    assert report.summary["total"] == 6
     assert report.summary["route_accuracy"] == 1
     assert report.summary["pass_rate"] == 1
+    assert report.summary["policy_gate_rejects"] == 3
+
+
+@pytest.mark.parametrize("prior_outcome", ["declined", "read_no_reply", "blocked"])
+def test_no_contact_outcome_is_rejected_without_calling_provider(
+    prior_outcome: str,
+) -> None:
+    agent_input = first_case().model_copy(update={"prior_outcome": prior_outcome})
+    provider = FailingProvider()
+
+    result = generate_lead_suggestion(agent_input, provider)
+
+    assert provider.calls == 0
+    assert result.provider == POLICY_GATE_PROVIDER
+    assert result.output.route == "reject"
+    assert result.output.draft == ""
+    assert result.output.quality_flags == ["repeat_contact"]
+
+
+@pytest.mark.parametrize("prior_outcome", ["none", "replied"])
+def test_contactable_outcome_reaches_provider(prior_outcome: str) -> None:
+    agent_input = first_case().model_copy(update={"prior_outcome": prior_outcome})
+
+    result = generate_lead_suggestion(agent_input, MockProvider())
+
+    assert result.provider == "mock"
+
+
+def test_evaluation_records_provider_error_and_continues() -> None:
+    cases = load_cases(PROJECT_ROOT / "evals" / "phase2_cases.v1.json")
+    report = run_evaluation(cases, FailingProvider())
+
+    assert report.summary["total"] == 6
+    assert report.summary["provider_errors"] == 3
+    assert report.summary["policy_gate_rejects"] == 3
+    assert report.summary["passed"] == 3
 
 
 def test_qwen_provider_sends_strict_json_schema() -> None:

@@ -1,4 +1,4 @@
-from typing import Literal, TypedDict
+from typing import Any, Callable, Literal, TypedDict
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -15,6 +15,7 @@ class LeadState(TypedDict, total=False):
     lead_id: str
     evidence_id: str
     task_id: str
+    workflow_run_id: str
     shop_name: str
     profile_url: str
     contact_basis: ContactBasis
@@ -33,6 +34,25 @@ class LeadState(TypedDict, total=False):
     task_status: Literal["new", "blocked", "scheduled", "opened", "sent", "failed", "read_no_reply"]
     scheduled_for: str
     trace: list[str]
+    # Phase 2B: human-entered shop context and the model's structured suggestion.
+    shop_type: str
+    shop_note: str
+    activity_note: str
+    purchase_signal_note: str
+    model_status: Literal["succeeded", "policy_rejected", "failed"]
+    model_error: str
+    model_route: Literal["dm", "comment", "reject"]
+    model_route_reason: str
+    model_summary: str
+    model_points: list[dict[str, str]]
+    model_product_match: list[str]
+    model_draft: str
+    model_uncertainties: list[str]
+    model_quality_flags: list[str]
+    model_meta: dict[str, Any]
+
+
+Suggester = Callable[..., dict]
 
 
 def collect_evidence(state: LeadState) -> dict:
@@ -78,6 +98,30 @@ def suggest_comment(state: LeadState) -> dict:
     }
 
 
+def make_model_suggest(suggester: Suggester):
+    """Wrap the injected model call as a graph node.
+
+    The graph stays free of provider and database imports; the caller decides
+    which model runs and where the invocation is recorded.
+    """
+
+    def model_suggest(state: LeadState) -> dict:
+        update = suggester(state)
+        return {
+            **update,
+            "route_review_status": "pending",
+            "trace": state.get("trace", []) + ["model_suggest"],
+        }
+
+    return model_suggest
+
+
+def route_after_model(state: LeadState) -> Literal["review", "reject"]:
+    # A deterministic do-not-contact reject ends here. A model reject or a model
+    # failure still goes to the human, who owns the final route decision.
+    return "reject" if state.get("model_status") == "policy_rejected" else "review"
+
+
 def reject_lead(state: LeadState) -> dict:
     return {
         "suggested_channel": "none",
@@ -95,8 +139,10 @@ def human_route_review(state: LeadState) -> Command:
             "type": "route_review",
             "message": "请选择最终触达方式：采用建议、改为评论、改为私信或暂不触达",
             "shop_name": state["shop_name"],
-            "fit_score": state["fit_score"],
+            "fit_score": state.get("fit_score"),
             "suggested_channel": state["suggested_channel"],
+            "model_status": state.get("model_status"),
+            "model_route_reason": state.get("model_route_reason"),
             "options": ["dm", "comment", "none"],
         }
     )
@@ -121,6 +167,32 @@ def human_route_review(state: LeadState) -> Command:
         },
         goto="draft_message",
     )
+
+
+def make_model_redraft(suggester: Suggester):
+    """Draft for the human-selected route, calling the model again only if needed."""
+
+    def draft_message(state: LeadState) -> dict:
+        update: dict = {}
+        if state.get("draft_override"):
+            draft = state["draft_override"]
+        elif state.get("model_status") == "succeeded" and state.get("model_route") == state["channel"]:
+            draft = state.get("model_draft", "")
+        else:
+            # The human overrode the suggestion (or the first call failed): ask the
+            # model for a draft on the route the human chose. The human's route
+            # decision itself is never changed by this call.
+            update = suggester(state, state["channel"])
+            update.pop("suggested_channel", None)
+            draft = update.get("model_draft", "") if update.get("model_status") == "succeeded" else ""
+        return {
+            **update,
+            "draft": draft,
+            "content_review_status": "pending",
+            "trace": state["trace"] + ["draft_message"],
+        }
+
+    return draft_message
 
 
 def draft_message(state: LeadState) -> dict:
@@ -223,14 +295,19 @@ def schedule_reminder(state: LeadState) -> dict:
     }
 
 
-def build_graph(checkpointer=None):
+def build_graph(checkpointer=None, suggester: Suggester | None = None):
     builder = StateGraph(LeadState)
-    builder.add_node("collect_evidence", collect_evidence)
-    builder.add_node("score_lead", score_lead)
-    builder.add_node("suggest_dm", suggest_dm)
-    builder.add_node("suggest_comment", suggest_comment)
+    if suggester is None:
+        builder.add_node("collect_evidence", collect_evidence)
+        builder.add_node("score_lead", score_lead)
+        builder.add_node("suggest_dm", suggest_dm)
+        builder.add_node("suggest_comment", suggest_comment)
+    else:
+        builder.add_node("model_suggest", make_model_suggest(suggester))
     builder.add_node("route_review", human_route_review)
-    builder.add_node("draft_message", draft_message)
+    builder.add_node(
+        "draft_message", draft_message if suggester is None else make_model_redraft(suggester)
+    )
     builder.add_node("policy_gate", policy_gate)
     builder.add_node("final_policy_gate", final_policy_gate)
     builder.add_node("content_review", human_content_review)
@@ -238,15 +315,21 @@ def build_graph(checkpointer=None):
     builder.add_node("reject", reject_lead)
     builder.add_node("blocked", blocked_lead)
 
-    builder.add_edge(START, "collect_evidence")
-    builder.add_edge("collect_evidence", "score_lead")
-    builder.add_conditional_edges(
-        "score_lead",
-        route_after_score,
-        {"dm": "suggest_dm", "comment": "suggest_comment", "reject": "reject"},
-    )
-    builder.add_edge("suggest_dm", "route_review")
-    builder.add_edge("suggest_comment", "route_review")
+    if suggester is None:
+        builder.add_edge(START, "collect_evidence")
+        builder.add_edge("collect_evidence", "score_lead")
+        builder.add_conditional_edges(
+            "score_lead",
+            route_after_score,
+            {"dm": "suggest_dm", "comment": "suggest_comment", "reject": "reject"},
+        )
+        builder.add_edge("suggest_dm", "route_review")
+        builder.add_edge("suggest_comment", "route_review")
+    else:
+        builder.add_edge(START, "model_suggest")
+        builder.add_conditional_edges(
+            "model_suggest", route_after_model, {"review": "route_review", "reject": "reject"}
+        )
     builder.add_edge("draft_message", "policy_gate")
     builder.add_conditional_edges(
         "policy_gate", route_after_policy, {"review": "content_review", "blocked": "blocked"}

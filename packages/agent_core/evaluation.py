@@ -8,8 +8,8 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from .contracts import LeadAgentInput, validate_evidence_refs
-from .prompting import build_prompt
-from .providers import LLMProvider
+from .pipeline import POLICY_GATE_PROVIDER, generate_lead_suggestion
+from .providers import LLMProvider, ProviderResponseError
 
 
 class ExpectedResult(BaseModel):
@@ -46,8 +46,29 @@ def run_evaluation(
 ) -> EvaluationReport:
     results: list[dict[str, Any]] = []
     for case in cases:
-        prompt = build_prompt(case.input)
-        generation = provider.generate(case.input, prompt)
+        try:
+            generation = generate_lead_suggestion(case.input, provider)
+        except ProviderResponseError as exc:
+            # One failed model call must not abort the whole evaluation run.
+            results.append(
+                {
+                    "case_id": case.input.case_id,
+                    "passed": False,
+                    "route_correct": False,
+                    "expected_route": case.expected.route,
+                    "actual_route": None,
+                    "missing_required": [],
+                    "forbidden_hits": [],
+                    "invalid_evidence_refs": [],
+                    "provider": provider.provider_name,
+                    "model": provider.model_name,
+                    "prompt_version": None,
+                    "latency_ms": None,
+                    "output": None,
+                    "error": str(exc),
+                }
+            )
+            continue
         output = generation.output
         normalized_draft = output.draft.casefold()
         missing_required = [
@@ -74,6 +95,7 @@ def run_evaluation(
                 "prompt_version": generation.prompt_version,
                 "latency_ms": generation.latency_ms,
                 "output": output.model_dump(mode="json"),
+                "error": None,
             }
         )
     total = len(results)
@@ -86,5 +108,12 @@ def run_evaluation(
         "route_accuracy": route_correct_count / total if total else 0,
         "provider": provider.provider_name,
         "model": provider.model_name,
+        "policy_gate_rejects": sum(
+            1 for item in results if item["provider"] == POLICY_GATE_PROVIDER
+        ),
+        "provider_errors": sum(1 for item in results if item["error"]),
+        "missing_required_cases": sum(1 for item in results if item["missing_required"]),
+        "forbidden_hit_cases": sum(1 for item in results if item["forbidden_hits"]),
+        "invalid_ref_cases": sum(1 for item in results if item["invalid_evidence_refs"]),
     }
     return EvaluationReport(summary=summary, cases=results)

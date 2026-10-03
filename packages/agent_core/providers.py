@@ -139,7 +139,14 @@ class MockProvider:
         primary = agent_input.evidence[0]
         stopped = agent_input.prior_outcome in ("declined", "read_no_reply", "blocked")
         irrelevant = agent_input.shop_type == "other"
-        if stopped or irrelevant:
+        forced = agent_input.human_selected_route
+        if forced == "comment":
+            route = "comment"
+            reason = "人工已选择评论路线，围绕当前内容做非销售型互动"
+            draft = f"你们对{primary.text}的展示很直观，细节解释得很清楚。"
+            points = [PersonalizationPoint(text=primary.text, evidence_ref=primary.evidence_id)]
+            product_match = []
+        elif (stopped or irrelevant) and forced is None:
             route = "reject"
             reason = "历史结果要求停止联系" if stopped else "店铺业务与目标产品不匹配"
             draft = ""

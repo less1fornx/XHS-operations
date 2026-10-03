@@ -1,0 +1,195 @@
+[
+  {
+    "input": {
+      "case_id": "DRAFT-INBOUND-001",
+      "shop_name": "南京礼序西服",
+      "xhs_account": "礼序西服",
+      "profile_url": "https://www.xiaohongshu.com/user/profile/draft001",
+      "account_type": "professional",
+      "shop_type": "suit_custom",
+      "activity_note": "近30天发布6条，以婚礼西装案例为主",
+      "price_level": "mid_high",
+      "business_context_note": "主营婚礼西装定制，客单价中高",
+      "purchase_signal_note": "对方主动私信询问衬衫和内搭能否少量拿货",
+      "content_url": null,
+      "content_text": null,
+      "evidence": [
+        {
+          "evidence_id": "e1",
+          "text": "对方私信：你们衬衫和内搭可以少量拿吗，方便的话加个微信聊",
+          "source_type": "conversation"
+        },
+        {
+          "evidence_id": "e2",
+          "text": "主页以婚礼西装定制案例为主",
+          "source_type": "profile"
+        }
+      ],
+      "contact_mode": "inbound",
+      "contact_history_note": "对方今天主动发来私信，我方尚未回复",
+      "prior_outcome": "none",
+      "product_facts": [
+        "我们是毛衫（针织衫）工厂，接受一件起订，一件也可以做",
+        "累计已承接过约200家不同西装定制店的业务",
+        "注重纱线、细节和做工，品质有保障",
+        "西装定制店只需留一件样衣，没有存货压力，有订单再下单",
+        "样衣不免费寄送；对方有意向时可按成本价购买一件，由我方邮寄",
+        "夏季针织polo等短袖款，秋冬套头与开衫款"
+      ],
+      "brand_context": "强调稳定供货、真实产品和长期合作"
+    },
+    "expected": {
+      "route": "dm",
+      "must_include": [
+        "一件起订"
+      ],
+      "must_not_include": [
+        "微信",
+        "二维码",
+        "加我"
+      ]
+    }
+  },
+  {
+    "input": {
+      "case_id": "DRAFT-MENSWEAR-001",
+      "shop_name": "武汉立领男装",
+      "xhs_account": "立领男装",
+      "profile_url": "https://www.xiaohongshu.com/user/profile/draft002",
+      "account_type": "personal",
+      "shop_type": "menswear",
+      "activity_note": "近30天发布14条，日常穿搭和到店新款",
+      "price_level": "mid_high",
+      "business_context_note": "男装成衣店，兼卖西装套装和衬衫，不做定制",
+      "purchase_signal_note": "近期视频提到正在为秋季补充通勤衬衫款式",
+      "content_url": "https://www.xiaohongshu.com/explore/draft002",
+      "content_text": "秋季通勤衬衫上新预告，店主说还在找合适的基础款。",
+      "evidence": [
+        {
+          "evidence_id": "e1",
+          "text": "店主称还在找合适的秋季基础款衬衫",
+          "source_type": "content"
+        },
+        {
+          "evidence_id": "e2",
+          "text": "店铺兼卖西装套装和衬衫",
+          "source_type": "profile"
+        }
+      ],
+      "contact_mode": "cold",
+      "contact_history_note": "此前没有互动或私信",
+      "prior_outcome": "none",
+      "product_facts": [
+        "我们是毛衫（针织衫）工厂，接受一件起订，一件也可以做",
+        "累计已承接过约200家不同西装定制店的业务",
+        "注重纱线、细节和做工，品质有保障",
+        "西装定制店只需留一件样衣，没有存货压力，有订单再下单",
+        "样衣不免费寄送；对方有意向时可按成本价购买一件，由我方邮寄",
+        "夏季针织polo等短袖款，秋冬套头与开衫款"
+      ],
+      "brand_context": null
+    },
+    "expected": {
+      "route": "dm",
+      "must_include": [
+        "衬衫"
+      ],
+      "must_not_include": [
+        "微信",
+        "最低价",
+        "看主页"
+      ]
+    }
+  },
+  {
+    "input": {
+      "case_id": "DRAFT-WEAK-EVIDENCE-001",
+      "shop_name": "长沙木扣西装",
+      "xhs_account": "木扣西装",
+      "profile_url": "https://www.xiaohongshu.com/user/profile/draft003",
+      "account_type": "unknown",
+      "shop_type": "suit_custom",
+      "activity_note": "近30天只发布1条，更新不稳定",
+      "price_level": "unknown",
+      "business_context_note": "简介写西装定制，但主页内容很少，无法确认是否在营业",
+      "purchase_signal_note": null,
+      "content_url": null,
+      "content_text": null,
+      "evidence": [
+        {
+          "evidence_id": "e1",
+          "text": "简介写有西装定制四个字",
+          "source_type": "profile"
+        }
+      ],
+      "contact_mode": "cold",
+      "contact_history_note": "此前没有互动或私信",
+      "prior_outcome": "none",
+      "product_facts": [
+        "我们是毛衫（针织衫）工厂，接受一件起订，一件也可以做",
+        "累计已承接过约200家不同西装定制店的业务",
+        "注重纱线、细节和做工，品质有保障",
+        "西装定制店只需留一件样衣，没有存货压力，有订单再下单",
+        "样衣不免费寄送；对方有意向时可按成本价购买一件，由我方邮寄",
+        "夏季针织polo等短袖款，秋冬套头与开衫款"
+      ],
+      "brand_context": null
+    },
+    "expected": {
+      "route": "reject",
+      "must_include": [],
+      "must_not_include": []
+    }
+  },
+  {
+    "input": {
+      "case_id": "DRAFT-REPLIED-001",
+      "shop_name": "厦门序言定制",
+      "xhs_account": "序言定制",
+      "profile_url": "https://www.xiaohongshu.com/user/profile/draft004",
+      "account_type": "professional",
+      "shop_type": "suit_custom",
+      "activity_note": "近30天发布9条，稳定更新客户试衣",
+      "price_level": "high",
+      "business_context_note": "主营高客单价商务西装定制",
+      "purchase_signal_note": "对方上次回复说可以发内搭款式看看",
+      "content_url": "https://www.xiaohongshu.com/explore/draft004",
+      "content_text": "夏季商务西装的内搭怎么选，展示了客户试穿。",
+      "evidence": [
+        {
+          "evidence_id": "e1",
+          "text": "对方回复：可以发内搭款式看看",
+          "source_type": "conversation"
+        },
+        {
+          "evidence_id": "e2",
+          "text": "近期视频讲夏季商务西装内搭选择",
+          "source_type": "content"
+        }
+      ],
+      "contact_mode": "warm",
+      "contact_history_note": "3天前私信一次，对方回复愿意看内搭款式",
+      "prior_outcome": "replied",
+      "product_facts": [
+        "我们是毛衫（针织衫）工厂，接受一件起订，一件也可以做",
+        "累计已承接过约200家不同西装定制店的业务",
+        "注重纱线、细节和做工，品质有保障",
+        "西装定制店只需留一件样衣，没有存货压力，有订单再下单",
+        "样衣不免费寄送；对方有意向时可按成本价购买一件，由我方邮寄",
+        "夏季针织polo等短袖款，秋冬套头与开衫款"
+      ],
+      "brand_context": "强调稳定供货、真实产品和长期合作"
+    },
+    "expected": {
+      "route": "dm",
+      "must_include": [
+        "内搭"
+      ],
+      "must_not_include": [
+        "微信",
+        "最低价",
+        "网址"
+      ]
+    }
+  }
+]

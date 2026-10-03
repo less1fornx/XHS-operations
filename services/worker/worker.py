@@ -13,7 +13,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB = PROJECT_ROOT / "data" / "agent_ops.db"
 
 
+REVIEW_TIMEOUT_HOURS = float(os.getenv("AGENT_REVIEW_TIMEOUT_HOURS", "48"))
+
+
 def run_once(store: RunStore) -> list[dict[str, object]]:
+    for run_id in store.expire_stale_reviews(REVIEW_TIMEOUT_HOURS):
+        print(json.dumps({"event": "run_expired", "run_id": run_id}, ensure_ascii=False), flush=True)
     reminders = store.claim_due_reminders()
     for reminder in reminders:
         print(

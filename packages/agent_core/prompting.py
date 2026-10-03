@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,8 +9,8 @@ from .contracts import LeadAgentInput
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-PROMPT_VERSION = "lead-outreach-v1"
-SYSTEM_PROMPT_PATH = PROJECT_ROOT / "prompts" / "lead_outreach" / "v1" / "system.md"
+PROMPT_VERSION = "lead-outreach-v3"
+SYSTEM_PROMPT_PATH = PROJECT_ROOT / "prompts" / "lead_outreach" / "v3" / "system.md"
 
 
 @dataclass(frozen=True)
@@ -17,6 +18,11 @@ class PromptBundle:
     version: str
     system: str
     user: str
+
+
+def system_prompt_sha256() -> str:
+    """Fingerprint of the system prompt file, so silent edits stay traceable."""
+    return hashlib.sha256(SYSTEM_PROMPT_PATH.read_bytes()).hexdigest()
 
 
 def build_prompt(agent_input: LeadAgentInput) -> PromptBundle:

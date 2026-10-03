@@ -7,7 +7,16 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Route = Literal["dm", "comment", "reject"]
 AccountType = Literal["personal", "professional", "unknown"]
-ShopType = Literal["suit_custom", "menswear", "apparel_studio", "other"]
+ShopType = Literal[
+    "suit_custom",
+    "menswear",
+    "apparel_studio",
+    "content_creator",
+    "staff_account",
+    "hobbyist",
+    "supplier",
+    "other",
+]
 PriceLevel = Literal["mid_high", "high", "unknown"]
 ContactMode = Literal["cold", "warm", "inbound", "explicit_permission"]
 PriorOutcome = Literal["none", "replied", "declined", "read_no_reply", "blocked"]
@@ -50,6 +59,8 @@ class LeadAgentInput(StrictModel):
     prior_outcome: PriorOutcome
     product_facts: list[str] = Field(min_length=1, max_length=20)
     brand_context: str | None = Field(default=None, max_length=2000)
+    # Set only when a human has already chosen the route and needs a draft for it.
+    human_selected_route: Literal["dm", "comment"] | None = None
 
 
 class PersonalizationPoint(StrictModel):
@@ -88,3 +99,17 @@ def validate_evidence_refs(
     refs = set(output.evidence_refs)
     refs.update(point.evidence_ref for point in output.personalization_points)
     return sorted(refs - known)
+
+
+NO_CONTACT_OUTCOMES: frozenset[str] = frozenset({"declined", "read_no_reply", "blocked"})
+
+
+def check_prior_outcome_gate(agent_input: LeadAgentInput) -> str | None:
+    """Return a reject reason when prior outcome forbids contact, else None.
+
+    Deterministic do-not-contact rule. It runs before any provider call so the
+    model can neither override it nor be billed for it.
+    """
+    if agent_input.prior_outcome in NO_CONTACT_OUTCOMES:
+        return f"历史联系结果为 {agent_input.prior_outcome}，按勿扰规则停止联系"
+    return None

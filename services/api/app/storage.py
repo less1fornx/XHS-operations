@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -13,6 +13,7 @@ from .models import (
     AuditLog,
     ContentEvidence,
     HumanReview,
+    ModelInvocation,
     OutreachOutcome,
     OutreachTask,
     PlatformAccount,
@@ -27,6 +28,10 @@ from .models import (
 
 DEFAULT_ACCOUNT_ID = "local-xhs-personal"
 LOCAL_ZONE = ZoneInfo("Asia/Shanghai")
+
+
+REVIEW_STAGES = ("route_review", "content_review")
+OPEN_STAGES = (*REVIEW_STAGES, "scheduled", "opened")
 
 
 class BusinessRuleError(Exception):
@@ -338,6 +343,13 @@ class RunStore:
             session.commit()
             return [self._public_outcome(row) for row in saved]
 
+    def record_model_invocation(self, **fields: Any) -> str:
+        invocation = ModelInvocation(**fields)
+        with Session(self.engine) as session:
+            session.add(invocation)
+            session.commit()
+            return invocation.id
+
     def claim_due_reminders(self, now: datetime | None = None) -> list[dict[str, Any]]:
         """Claim each due reminder once; this never sends or opens a platform page."""
         current = now or utc_now()
@@ -444,6 +456,103 @@ class RunStore:
             )
             session.commit()
             return payload
+
+    def end_run(
+        self,
+        run_id: str,
+        reason: str,
+        *,
+        actor: str = "local_user",
+        event_type: str = "run_ended_by_human",
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """End an unfinished run without contacting anyone and free its quota."""
+        with Session(self.engine) as session:
+            snapshot = session.get(RunSnapshot, run_id)
+            if snapshot is None:
+                raise BusinessRuleError("run_not_found", "工作流不存在")
+            if snapshot.stage not in OPEN_STAGES:
+                raise BusinessRuleError("invalid_transition", "当前任务已经结束，不能再次结束")
+            payload = json.loads(snapshot.payload_json)
+            state = payload["state"]
+            now = utc_now()
+            ended_stage = snapshot.stage
+            if ended_stage == "route_review":
+                state["route_review_status"] = "rejected"
+                state["channel"] = "none"
+            elif ended_stage == "content_review":
+                state["content_review_status"] = "rejected"
+            state["task_status"] = "blocked"
+            state["result_note"] = reason
+            state["trace"] = [*state.get("trace", []), event_type]
+            payload.update({"stage": "blocked", "interrupt": None, "state": state})
+            snapshot.stage = "blocked"
+            snapshot.task_status = "blocked"
+            snapshot.payload_json = json.dumps(payload, ensure_ascii=False)
+            snapshot.updated_at = now
+
+            task = session.exec(
+                select(OutreachTask).where(OutreachTask.workflow_run_id == run_id)
+            ).first()
+            if task is not None:
+                task.status = "blocked"
+                task.result_note = reason
+                task.updated_at = now
+            workflow = session.get(WorkflowRun, run_id)
+            if workflow is not None:
+                workflow.status = "cancelled"
+                workflow.output_json = json.dumps(payload, ensure_ascii=False)
+                workflow.finished_at = now
+                workflow.updated_at = now
+            session.add(
+                RunEvent(
+                    run_id=run_id,
+                    event_type=event_type,
+                    payload_json=json.dumps(payload, ensure_ascii=False),
+                    idempotency_key=idempotency_key,
+                    created_at=now,
+                )
+            )
+            session.add(
+                AuditLog(
+                    actor=actor,
+                    action=event_type,
+                    entity_type="workflow_run",
+                    entity_id=run_id,
+                    after_json=json.dumps(
+                        {"ended_stage": ended_stage, "reason": reason}, ensure_ascii=False
+                    ),
+                    trace_id=run_id,
+                )
+            )
+            session.commit()
+            task_id, channel = state.get("task_id"), state.get("channel")
+        if task_id and channel in ("dm", "comment"):
+            self.release_quota(task_id, channel)
+        return payload
+
+    def expire_stale_reviews(
+        self, max_age_hours: float, now: datetime | None = None
+    ) -> list[str]:
+        """Auto-end runs that have waited for human review longer than the limit."""
+        cutoff = (now or utc_now()) - timedelta(hours=max_age_hours)
+        with Session(self.engine) as session:
+            waiting = session.exec(
+                select(RunSnapshot).where(RunSnapshot.stage.in_(REVIEW_STAGES))
+            ).all()
+            stale = [
+                row.id
+                for row in waiting
+                if (row.updated_at.replace(tzinfo=timezone.utc) if row.updated_at.tzinfo is None else row.updated_at) < cutoff
+            ]
+        for run_id in stale:
+            self.end_run(
+                run_id,
+                f"超过 {max_age_hours:g} 小时未人工处理，系统自动结束",
+                actor="system",
+                event_type="run_expired",
+            )
+        return stale
 
     def get(self, run_id: str) -> dict[str, Any] | None:
         with Session(self.engine) as session:

@@ -1,6 +1,6 @@
 # AI 协作共同记忆
 
-最后更新：2026-10-02
+最后更新：2026-10-02（Claude，Phase 2B 第一步）
 
 本文件是用户、Codex 与 Claude CLI 三方共同维护的讨论库。它用于交换理解、分别记录观点、比较方案、完成代码交接和沉淀待决问题，不代替正式需求与架构文档。
 
@@ -139,7 +139,7 @@ Agent 的观点不是需求。存在分歧时，保留双方意见并请用户�
 - 当前数据库：SQLite；长期部署计划迁移 PostgreSQL。
 - 当前云端模型路线：Qwen API；未来本地文本模型沿用 Qwen 系。
 - 模型必须经过 `LLMProvider` 抽象，业务规则不能绑定具体模型供应商。
-- 当前目录还不是 Git 仓库，因此现阶段禁止 Codex 与 Claude 在同一目录并行修改；如需并行，先由用户决定是否初始化 Git 和使用 worktree。
+- 2026-10-02 已初始化 Git 仓库（分支 `main`，基线提交 `c827bf3`）。同一工作目录仍然禁止两位 Agent 并行修改；如需并行，使用不同 worktree。
 
 ### 总体架构
 
@@ -189,18 +189,22 @@ React/Vite Web
 - Phase 0：完成。
 - Phase 1A 至 1D：完成。
 - Phase 2A：完成基础骨架，包括结构化输入输出、版本化 Prompt、Qwen/Mock Provider、证据引用校验和固定案例评测。
-- Phase 2B：尚未开始。目标是接入生产 Worker、持久化模型调用，并连接前端人工审核。
-- 当前自动测试：6 项通过。
-- 当前 Mock 评测：4/4 案例通过。该结果只证明流程和测试规则可运行，不代表 Qwen 的真实准确率。
-- Qwen 尚未进行真实评测，因为本机尚未配置 `DASHSCOPE_API_KEY`。
+- Phase 2B：主链路已端到端跑通（录入 → 模型建议 → 人工路线审核 → 文案审核 → 加入提醒队列），模型调用已持久化。尚未完成结果反馈窗口、周期分析和真实样本评测集。
+- 当前自动测试：24 项通过。
+- 当前 Mock 评测：正式集 6/6 通过，其中 3 个由 Policy Gate 直接拒绝、未调用 Provider。该结果只证明流程和测试规则可运行，不代表 Qwen 的真实准确率。
+- Qwen 已于 2026-10-02 完成首次真实评测：正式集 6/6 通过，但其中只有 3 个是真实模型调用，样本过少，不能视为准确率。
 
 ### 当前代码入口
 
 - Agent 输入输出：`packages/agent_core/contracts.py`
 - Provider：`packages/agent_core/providers.py`
+- 生成入口（先 Policy Gate，后模型调用）：`packages/agent_core/pipeline.py`
 - Prompt 构建：`packages/agent_core/prompting.py`
 - 评测：`packages/agent_core/evaluation.py`
-- 第一版 Prompt：`prompts/lead_outreach/v1/system.md`
+- 当前 Prompt：`prompts/lead_outreach/v3/system.md`（v1、v2 保留）
+- 产品事实：`config/product_facts.v1.json`
+- 工作流图：`labs/phase0-langgraph/src/phase0_graph/lead_workflow.py`
+- 模型输入构造与落库：`services/worker/lead_generation.py`
 - 固定案例：`evals/phase2_cases.v1.json`
 - Phase 2 学习文档：`docs/phase2-agent-design-learning.md`
 
@@ -406,6 +410,29 @@ Phase 2B 按以下顺序实施：
 
 **置信度**：高。以上所有结论均基于代码阅读和测试运行，不依赖模型推测。
 
+### CLAUDE-003｜2026-10-02｜有效｜更正与 Phase 2B 顺序建议
+
+**更正 CLAUDE-002 第三节第 1 点**
+
+我在首次审查中把 `QwenProvider` 同步调用列为“高优先级、Worker 接入的前提问题”。读过 `services/worker/worker.py` 后确认 Worker 是同步轮询进程，不在事件循环内，这个风险当前不存在。该条降级为“将来出现 async 调用方时再处理”，对应 DECISION-002 方案 B。原判断基于“Worker 通常是 async”的假设，没有先核对代码，属于我的失误。
+
+**Phase 2B 顺序建议（与 CODEX-001 的差异，等待 Codex 表态）**
+
+1. 勿扰前置拦截和共用生成入口（已完成）。
+2. 固定案例扩展，由用户确认业务预期（进行中）。
+3. 配置 `DASHSCOPE_API_KEY`，跑真实 Qwen 评测。
+4. `model_invocations` 表和 Alembic 迁移。
+5. Worker / LangGraph 接入、失败状态、前端人工审核。
+
+与 CODEX-001 的差异是把真实 Qwen 评测放在建表之前。理由：目前所有“通过”只对 Mock 成立，这是项目最大的未知数；并且看过真实输出、耗时、usage 和错误形态后，`model_invocations` 的字段才定得准。用户已于 2026-10-02 同意按此顺序推进。
+
+**已知的设计取舍**
+
+- Policy Gate 拒绝时返回的 `GenerationResult` 使用 `provider="policy_gate"`、`prompt_version=""`。将来落库时，这类记录是否写入 `model_invocations`（它不是模型调用）需要在表设计时决定。
+- `prior_outcome="replied"` 当前会正常进入模型调用。已回复之后的跟进是否仍算“首次沟通”范围，需要用户确认业务含义。
+
+**置信度**：高。
+
 ### Claude 快速阅读顺序
 
 首次对接按以下顺序阅读，不需要盲目扫描整个目录：
@@ -445,7 +472,7 @@ Claude 第一次进入项目时先不要修改业务代码，应完成以下工�
 
 ## 7. 待用户决定
 
-### DECISION-001｜2026-10-02｜未决定
+### DECISION-001｜2026-10-02｜已决定：方案 A
 
 **问题**：`prior_outcome` 勿扰前置检查优先级
 
@@ -456,11 +483,11 @@ Claude 第一次进入项目时先不要修改业务代码，应完成以下工�
 
 **影响范围**：`contracts.py` 或新增的 Policy Gate 函数；`providers.py` 调用前逻辑；`evaluate_phase2.py` 可能需要跳过 LLM 的案例。
 
-**用户最终决定**：（待填写）
+**用户最终决定**：方案 A。用户于 2026-10-02 授权“按照 Claude 的思路”推进，并确认后续建议。已实现为 `check_prior_outcome_gate()` 和共用入口 `generate_lead_suggestion()`。
 
 ---
 
-### DECISION-002｜2026-10-02｜未决定
+### DECISION-002｜2026-10-02｜已决定：方案 B
 
 **问题**：`QwenProvider` 同步/异步方案
 
@@ -471,11 +498,11 @@ Phase 2B 将 QwenProvider 接入 FastAPI/Worker 时，需要选择：
 
 **影响范围**：`providers.py`、Worker 中的调用方式、测试中的 `httpx.MockTransport` 用法。
 
-**用户最终决定**：（待填写）
+**用户最终决定**：方案 B。依据：`services/worker/worker.py` 实际是同步轮询，不存在事件循环阻塞；`QwenProvider` 保持同步，将来某个调用方确实运行在 async 上下文时，再由调用方用 `asyncio.to_thread()` 包装。该选项由 Claude 读代码后提出，用户于 2026-10-02 确认整体建议时一并认可。
 
 ---
 
-### DECISION-003｜2026-10-02｜未决定
+### DECISION-003｜2026-10-02｜已决定：方案 B
 
 **问题**：固定案例是否在 Phase 2B Qwen 评测前扩展到 8-10 个？
 
@@ -484,9 +511,168 @@ Phase 2B 将 QwenProvider 接入 FastAPI/Worker 时，需要选择：
 
 **影响范围**：`evals/phase2_cases.v1.json`；评测可信度；用户参与设计的时间投入。
 
-**用户最终决定**：（待填写）
+**用户最终决定**：方案 B，先扩展再跑 Qwen。当前进度：正式集已加入 `declined`、`blocked` 两个确定性案例（共 6 个）；另有 4 个需要业务判断的草稿案例放在 `evals/phase2_cases.v2-draft.json`，等待用户逐条确认预期后并入正式集。
+
+### DECISION-004｜2026-10-02｜已决定
+
+**问题**：我方产品事实应如何表述？
+
+真实私信显示我方是东莞毛衫加工厂（27 年），向西装定制店提供单件毛衫定制，也可批量。现有评测案例和项目文档使用“西装、衬衫、内搭、支持一件起订”。需要用户给出准确的产品清单、可公开的卖点和不可承诺的内容，再同步到 `docs/project-memory.md` 和评测案例。
+
+**用户最终决定**：我方是可做高端品质的毛衫工厂，核心优势是一件起订，细节和质量经得起推敲；对西装定制店的促单要点是只需留一件样衣、无存货压力、一件也可下单。已同步到 `docs/project-memory.md` 和评测案例的 `product_facts`。用户随后确认：“生产经验”不放在首次私信，对方有意向后再说；首次私信主打工厂加一件起订、累计约 200 家西装定制店业务、品质有保障。
+
+---
+
+### DECISION-005｜2026-10-02｜已决定：方案 A
+
+**问题**：对方主动索要电话或微信、或主动发来二维码时，系统应如何处理？
+
+- **方案 A**：系统不生成任何含联系方式的回复，只提示“进入人工商务阶段”，由用户自行按平台当前规则处理。
+- **方案 B**：系统生成站内回复草稿（例如先在站内发款式和价格信息），不包含联系方式，同时提示人工决定是否转站外。
+
+两种方案下，系统都不生成用图片、谐音、符号拆分等方式规避平台检测的内容。
+
+**用户最终决定**：方案 A，先人工介入。已同步到 `docs/project-memory.md`。代码层尚未实现“对方索要联系方式”的识别，需要先在输入契约中增加对应信号，留待 Worker 接入时设计。用户另提出在内容页面中展示微信（“定制+v”）的想法；Claude 指出这与 `xhs-compliance-rules.md` 默认拦截项（微信、二维码、看主页等站外导流）冲突，未采纳为方案，等待用户决定。
 
 ## 8. 最近交接记录
+
+### 2026-10-02 19:10｜Claude｜用无头浏览器实测前端，修复审核按钮全部失效的问题
+
+- 目的：用户报告页面 422；此前 Claude 只验证过接口，没有实际看过页面。
+- 方法：在草稿目录安装 `playwright-core`，驱动本机 Chrome 无头模式，针对数据库副本和 Mock 模型的测试环境走完整流程并截图。未改动用户正在运行的服务和真实数据库。
+- 根因：`apps/web/src/App.tsx` 的 `api()` 把 `...options` 写在合并后的 `headers` 之后，带自定义请求头（幂等键）的请求会丢失 `Content-Type`，后端把 JSON 当成字符串，返回 422。路线决定、文案审核、结果记录、结束任务全部受影响，只有“开始评选”不受影响。这是 Phase 1 遗留问题。Claude 先前“输入超长”的推断是错的。
+- 其他修改：
+  - 幂等键里的中文文案改为短哈希（请求头只能是 ASCII）。
+  - 选择私信时，“联系依据备注”为空但模型已给出带证据引用的个性化依据的，允许通过；表单标签改为可选。
+  - 422 校验错误在页面上显示具体字段。
+  - 输入长度上限放宽，超长由模型输入构造时截取。
+  - `API` 地址可用 `VITE_API_URL` 覆盖，默认不变。
+  - 文案编辑框加高；人工结束的任务显示“任务已结束，不会联系这家店铺”。
+- 验证：浏览器流程“创建 → 路线审核 → 采纳私信 → 文案审核 → 加入队列 → 另一条任务人工结束”全程无报错，截图已人工查看；`pytest` 24 passed；前端构建通过。
+- 未完成事项：截图录入与批量筛选（用户已同意作为下一步）；用户提出当前做法没有让其掌握 Agent 设计，下一步需改为先设计、后实现的协作方式。
+
+### 2026-10-02 18:20｜Claude｜按用户前端反馈修改：改路线重新生成、结束任务与超时、店铺类型、跨域
+
+- 目的：落实用户试用前端后的四条反馈。
+- 修改内容：
+  - 跨域：API 原来只允许 5173 端口，前端落到 5174 时报 “Failed to fetch”。改为允许本机任意端口（`allow_origin_regex`）。
+  - 改路线重新生成：`LeadAgentInput` 新增 `human_selected_route`；人工选的路线与模型建议不同时，`draft_message` 节点按人工选定路线再调用一次模型；模型不按指定路线输出则视为失败，草稿留空由人工撰写。人工的路线决定不会被模型改动。
+  - Prompt v3（`prompts/lead_outreach/v3/system.md`）：新增“人工已选路线必须服从”和“评论必须紧扣当前内容具体细节”两条规则。v1、v2 保留。
+  - 结束任务：新增 `POST /api/runs/{id}/end` 和 `RunStore.end_run()`，路线审核、文案审核、待打开、已打开四个阶段都可人工结束，释放已占配额并写审计。前端在这四个阶段顶部显示提示和“结束任务”按钮。
+  - 超时自动结束：`RunStore.expire_stale_reviews()`，等待人工审核超过 48 小时（`AGENT_REVIEW_TIMEOUT_HOURS` 可调）自动结束；在 `GET /api/runs` 和 Worker 轮询中触发。已进入提醒队列的任务不自动结束。
+  - 店铺类型新增：内容博主、店员个人号、个人爱好者、上游供应商；“男装成衣店”显示为“成衣品牌 / 男装店”。用户说明前期不区分对待，等数据积累后再分化。
+- 验证：`pytest` 24 passed；前端构建通过；数据库副本上用真实 Qwen 验证“模型建议私信 → 人工改评论 → 重新生成评论草稿 → 人工结束”全程成功，两次调用均落库；5174 端口跨域预检通过；Qwen 固定案例评测（v3）结果见输出。
+- 未完成事项：浏览器界面仍未由 Claude 实际查看；用户正在运行的 8000 端口 API 是旧代码，需要重启才生效。
+- 设计说明：结束和超时在存储层直接改状态，没有恢复 LangGraph 的暂停点；API 以存储层阶段为准，已结束的任务不能再被恢复。
+
+### 2026-10-02 17:40｜Claude｜模型生成接入工作流、API 和前端审核页（端到端跑通）
+
+- 目的：让“开始评选”真正调用模型，人工在页面上看到建议、理由、依据和草稿。
+- 修改文件：
+  - `labs/phase0-langgraph/src/phase0_graph/lead_workflow.py`：`build_graph(suggester=...)`；传入时用 `model_suggest` 节点替换规则评分节点，不传时保持 Phase 0 原有路径；`draft_message` 在人工采纳模型路线时使用模型草稿，改路线时留空由人工撰写。
+  - `services/worker/lead_generation.py`：`build_agent_input()`、`build_suggester()`、`load_product_facts()`。
+  - `services/api/app/main.py`：启动时按环境变量选择 Provider 并注入图；`RunCreate` 增加店铺类型、店铺情况、活跃情况、采购信号；空文案不能加入队列；`/api/health` 返回当前模型。
+  - `apps/web/src/App.tsx`、`App.css`：录入表单新增字段；路线审核页显示模型建议、理由、个性化依据、产品匹配点、不确定点、风险提示、证据和模型版本；三条路线都可由人工选择。
+  - `prompts/lead_outreach/v2/system.md`（新增）：在 v1 基础上增加两条 DM 规则（不得提出产品事实之外的服务或承诺；产品事实中的具体数字必须原样引用）。`PROMPT_VERSION` 改为 `lead-outreach-v2`。v1 文件保留。
+  - `config/product_facts.v1.json`（新增）：用户确认的产品事实，含“样衣按成本价购买”。评测案例同步。
+  - `tests/test_model_workflow.py`（新增）；`docs/project-memory.md` 补充寄样规则。
+- 关键设计决定：
+  - 图不依赖 Provider 和数据库，模型调用通过注入的函数进入，便于替换模型和测试。
+  - 只有确定性勿扰拒绝会直接结束；模型建议拒绝或模型调用失败都仍然进入人工路线审核，由人工决定。
+  - 人工改路线时不再次调用模型，草稿留空。是否改为按人工选定路线重新生成，留待用户决定。
+- 验证命令与结果：
+  - `PYTHONPATH=.:labs/phase0-langgraph/src uv run pytest -q` → 20 passed。
+  - 前端 `npm run build` 通过；`npm run lint` 只有 3 条原有 effect 写法的警告。
+  - 用数据库副本启动 API（端口 8011）并调用真实 Qwen：创建候选 → 路线审核（模型建议私信）→ 文案审核（草稿等于模型草稿，策略检查无命中）→ 加入队列，全程成功；`model_invocations` 写入 1 条成功记录。真实数据库未写入测试数据。
+  - Qwen 固定案例评测（Prompt v2）结果见输出文件。
+- 未完成事项：浏览器里的界面未由 Claude 实际打开查看，只做了构建和接口验证；前端结果反馈窗口；周期分析；“对方索要联系方式”的识别；`shop_type` 扩充；真实样本转评测案例。
+- 风险：模型调用在请求内同步执行，一次约 5 到 10 秒，期间页面显示“模型分析中”；Qwen 不可用时会进入人工路线审核并显示错误。
+
+### 2026-10-02 16:50｜Claude｜迁移真实数据库，更新首次私信卖点
+
+- 目的：用户同意迁移真实数据库，并确认首次私信的三个卖点。
+- 修改文件：`data/agent_ops.db` 升级到 `b2e6f0c8a915`（迁移前备份为 `data/agent_ops.backup-20261002-pre-model-invocations.db`，已被 Git 忽略）；`docs/project-memory.md`；两个评测案例文件的 `product_facts`。
+- 验证：迁移后 `model_invocations` 表存在且为空，原有 2 条 `shop_leads` 保留；测试和 Qwen 评测结果见本条下方。
+- 现状核对：后端已有 `/api/outcomes` 和 `/api/outcomes/import`，`outreach_outcomes` 表已有需求、吸引点、异议三类标签字段；前端 `apps/web/src` 尚无结果反馈界面。
+- 未完成事项：前端“人工提供数据”窗口；周期性提纯规律的分析流程；截图样本转评测案例。
+- 风险：“累计约 200 家”是对外宣称的数字，需要用户确保属实。
+
+### 2026-10-02 16:20｜Claude｜`model_invocations` 表、迁移和记录入口
+
+- 背景：用户说明 Codex 账号暂时不可用，Claude 暂为唯一实施 Agent；原定由 Codex 复核的事项改由用户复核。“Codex 观点”区保持原样未动。
+- 目的：持久化每一次生成尝试（成功、失败、被 Policy Gate 拒绝），为 Worker 接入做准备。
+- 修改文件：
+  - `services/api/app/models.py`：新增 `ModelInvocation`。
+  - `alembic/versions/b2e6f0c8a915_model_invocations.py`（新增）。
+  - `services/api/app/storage.py`：新增 `RunStore.record_model_invocation()`。
+  - `packages/agent_core/prompting.py`：新增 `system_prompt_sha256()`，记录 Prompt 文件指纹，解决版本号与文件内容不绑定的问题。
+  - `services/worker/lead_generation.py`（新增）：`generate_and_record()`，调用共用入口并落库；失败先记录再抛出。
+  - `tests/test_model_invocations.py`（新增）。
+- 关键设计决定：`agent_core` 不依赖数据库，落库放在 Worker 层；Policy Gate 拒绝也写一条记录（`status=policy_rejected`，无 Prompt 版本），便于审计“为什么没调用模型”；`source` 字段区分生产与评测。
+- 验证命令：`PYTHONPATH=.:labs/phase0-langgraph/src uv run pytest -q`；在数据库副本上执行 `alembic upgrade head`、`downgrade -1`、再 `upgrade head`、`alembic check`。
+- 验证结果：15 passed；副本上升级、降级、再升级均成功，`alembic check` 无模型与迁移差异。
+- 未完成事项：真实数据库 `data/agent_ops.db` 尚未执行迁移（仍在 `9a4d7e2c1b30`），需要用户同意后运行 `uv run alembic upgrade head`；`generate_and_record()` 尚未接入 LangGraph 工作流和前端；人工最终路线和文案与调用记录的关联尚未设计。
+- 风险或分歧：数据库迁移本应由另一方复核，现在没有复核方，请用户过目字段。
+- 建议下一步：把生成步骤接入 LangGraph 工作流（替换 Phase 0 的规则建议节点），并在前端审核页展示模型建议。
+
+### 2026-10-02 15:45｜Claude｜更正产品事实，记录 DECISION-004/005
+
+- 目的：用户确认真实产品卖点和“对方索要联系方式”的处理方式。
+- 修改文件：`docs/project-memory.md`（业务目标中的产品表述、固定运营边界新增一条，均为用户当日确认）；`evals/phase2_cases.v1.json` 与 `evals/phase2_cases.v2-draft.json`（`product_facts` 改为毛衫工厂的真实卖点）；`docs/ai-collaboration-memory.md`。未修改业务代码和 Prompt。
+- 验证命令与结果：`pytest` 12 passed；Mock 评测 6/6；Qwen 评测 6/6（`outputs/phase2-evaluation-qwen-20261002-154847.json`，3 个真实调用，无调用错误）。
+- 未完成事项：Prompt 角色描述仍是笼统的“服装供应”，未改；`shop_type` 尚未覆盖成衣品牌、博主等真实对象；“对方索要联系方式”的代码识别未实现。
+- 风险或分歧：用户提出在内容页展示微信的想法与合规基线冲突，Claude 不建议，待用户决定。
+
+### 2026-10-02 15:20｜Claude｜整理用户提供的 18 个真实历史触达样本
+
+- 目的：用户提供 47 张截图（18 个账号的主页、内容、私信），用于替代我编造的草稿案例。
+- 修改文件：新增 `evals/real_outreach_samples.v1-draft.json`（去标识化：不含账号名、电话、微信、二维码；原图留在用户本机，不入库）。未修改业务代码。
+- 样本构成：已读不回 3、回复后无后文 1、明确拒绝 1、对方主动联系 3、有回复且有意向 10。
+- 关键发现（均为观察，样本不足，不构成规律）：
+  - 我方真实身份是东莞毛衫（针织）加工厂，主打单件毛衫定制；现有案例和 `product_facts` 中的“西装、衬衫、内搭”与事实不符，需要用户确认后更正。
+  - 截图显示平台限制：对方关注或回复之前，24 小时内最多只能发 1 条文字消息。只发“您好”的 2 例均无回复。
+  - 有意向样本中多数随后交换了站外联系方式，其中 4 例由对方先提出（索要电话或微信、发来二维码、问怎么联系）；我方曾用图片、手写、谐音和符号拆分发送电话。这些做法与当前合规基线冲突，不得作为模板。
+  - 同一条长模板既得到“不需要”，也得到“发点资料看看”“怎么合作”。
+  - 出现了现有 `shop_type` 未覆盖的对象：成衣品牌、内容博主、店员个人号、编织爱好者（来料加工咨询）、上游纱线供应方。
+- 未完成事项：样本待用户核对；未转换为评测案例。outcome 是事后结果，不能直接当作 `expected.route`。
+- 风险或分歧：见“待用户决定” DECISION-004、005。
+- 建议下一步：用户确认产品事实和“对方主动索要联系方式”的处理规则后，再把样本转成评测案例并修订 Prompt。
+
+### 2026-10-02 14:30｜Claude｜首次真实 Qwen 评测（6 个正式案例）
+
+- 目的：用户已提供 DashScope 密钥，取得 Qwen 的第一手结果。
+- 修改文件：新增本机 `.env`（权限 600，已被 `.gitignore` 忽略，未进入 Git；密钥不写入任何文档）；新增 `outputs/phase2-evaluation-qwen-20261002-142614.json`（已核对不含密钥）。未修改业务代码。
+- 验证命令：`PYTHONPATH=. uv run python -m services.worker.evaluate_phase2 --provider qwen`
+- 验证结果：模型 `qwen3.7-plus-2026-05-26`，6/6 通过，路线 6/6 正确；3 个由 Policy Gate 拒绝，3 个真实调用，耗时约 3.2–8.4 秒，无调用错误、无无效引用。
+- 人工阅读发现（自动检查未覆盖）：XHS-2026-0001 的 DM 草稿询问“春夏面料…供应”，但 `product_facts` 只有西装、衬衫、内搭，没有面料；草稿也没有提到核心产品“内搭”。现有 `must_include`/`must_not_include` 抓不到这类“产品事实越界”和“核心卖点遗漏”。
+- 未完成事项：真实调用样本只有 3 个，6/6 不能当作准确率；用户将提供真实成功案例；4 个草稿案例用户认为草率，不并入正式集。
+- 风险或分歧：密钥曾出现在对话中，建议用户在百炼控制台轮换；用户指出平台规则持续变化，历史成功样板的话术可能已不合规，案例需要记录联系时间和当时规则版本。
+- 建议下一步：用户提供真实案例；讨论是否增加“草稿只能引用 product_facts 中的产品”的程序校验；之后设计 `model_invocations`。
+
+### 2026-10-02 14:10｜Claude｜Phase 2B 第一步：Git 基线、勿扰前置拦截、共用生成入口
+
+- 目的：落实用户对 DECISION-001/002/003 的决定，开始 Phase 2B。
+- 修改文件：
+  - `.gitignore`（忽略 `.DS_Store`、`.tmp/`、`outputs/*.ndjson`）；初始化 Git，基线提交 `c827bf3`。
+  - `packages/agent_core/contracts.py`：新增 `NO_CONTACT_OUTCOMES`、`check_prior_outcome_gate()`。
+  - `packages/agent_core/pipeline.py`（新增）：`generate_lead_suggestion()`，先 Policy Gate，后 `build_prompt` + `provider.generate`。
+  - `packages/agent_core/evaluation.py`：改用共用入口；单个案例的 `ProviderResponseError` 记录为失败并继续；summary 增加 `policy_gate_rejects`、`provider_errors`、`missing_required_cases`、`forbidden_hit_cases`、`invalid_ref_cases`。
+  - `evals/phase2_cases.v1.json`：新增 `declined`（XHS-2026-0007）、`blocked`（XHS-2026-0008），共 6 个。
+  - `evals/phase2_cases.v2-draft.json`（新增）：4 个待用户确认的草稿案例（inbound 且对方提出加微信、menswear、证据不足、已回复后的 warm 跟进）。
+  - `tests/test_phase2_agent_core.py`：新增拦截、放行、评测容错测试。
+  - `docs/ai-collaboration-memory.md`：填写三个 DECISION，新增 CLAUDE-003，更新共同事实中可验证的测试数、Git 状态和代码入口。
+- 关键设计决定：拦截规则放在 `contracts.py`（纯领域规则），编排放在 `pipeline.py`；评测和将来的 Worker 必须都走 `generate_lead_suggestion()`，避免生产路径与评测路径分叉。
+- 验证命令：
+  - `PYTHONPATH=.:labs/phase0-langgraph/src uv run pytest -q`
+  - `PYTHONPATH=. uv run python -m services.worker.evaluate_phase2 --provider mock`
+  - `PYTHONPATH=. uv run python -m services.worker.evaluate_phase2 --provider mock --cases evals/phase2_cases.v2-draft.json`
+- 验证结果：12 passed；正式集 6/6 通过，其中 3 个由 Policy Gate 拒绝；草稿集 Mock 2/4 通过（inbound 案例草稿中出现“微信”，证据不足案例被 Mock 判为 dm）。草稿集未通过是预期现象，说明这两个案例能区分规则替身和真实判断，不是回归。
+- 未完成事项：草稿案例等待用户确认；`DASHSCOPE_API_KEY` 未配置，Qwen 真实评测未运行；`model_invocations`、Worker 接入、前端审核未开始；本次代码修改尚未提交，可用 `git diff` 查看。
+- 风险或分歧：
+  - 另一个 Claude CLI 会话（13:50 起停在 `contracts.py` 的修改确认提示）在本次修改期间仍未关闭。它如果被批准，会再插入一份同名拦截函数，请直接关闭该会话，不要批准。
+  - Phase 2B 顺序与 CODEX-001 不同（Qwen 评测提前到建表之前），Codex 尚未表态。
+  - Mock 的 `stopped` 分支现在不会被触发（Gate 已先拦截），保留它是为了直接调用 Mock 时行为不变。
+- 建议下一步：用户确认 4 个草稿案例的预期并配置密钥；随后运行 Qwen 评测，再设计 `model_invocations`。
 
 ### 2026-10-02｜Claude｜首次审查：写入完整观点
 

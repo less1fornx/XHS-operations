@@ -205,6 +205,30 @@ class AuditLog(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class ModelInvocation(SQLModel, table=True):
+    __tablename__ = "model_invocations"
+
+    id: str = Field(default_factory=new_id, primary_key=True)
+    workflow_run_id: str | None = Field(default=None, index=True)
+    shop_lead_id: str | None = Field(default=None, index=True)
+    source: str = "production"
+    case_id: str | None = None
+    status: str
+    provider: str
+    model: str
+    prompt_version: str | None = None
+    prompt_sha256: str | None = None
+    input_json: str = "{}"
+    evidence_ids_json: str = "[]"
+    output_json: str | None = None
+    error_type: str | None = None
+    error_message: str | None = None
+    request_id: str | None = None
+    usage_json: str = "{}"
+    latency_ms: int | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class RunSnapshot(SQLModel, table=True):
     __tablename__ = "run_snapshots"
 

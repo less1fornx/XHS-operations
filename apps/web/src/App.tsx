@@ -20,6 +20,7 @@ type Channel = 'dm' | 'comment' | 'none'
 type ContactBasis = 'cold_outreach' | 'prior_conversation' | 'inbound_inquiry' | 'explicit_permission'
 type Stage = 'route_review' | 'content_review' | 'scheduled' | 'opened' | 'sent' | 'failed' | 'read_no_reply' | 'blocked'
 type View = 'workflow' | 'queue' | 'risk'
+type ShopType = 'suit_custom' | 'menswear' | 'apparel_studio' | 'content_creator' | 'staff_account' | 'hobbyist' | 'supplier' | 'other'
 
 type Run = {
   id: string
@@ -35,6 +36,17 @@ type Run = {
     task_status?: string
     scheduled_for?: string
     result_note?: string
+    model_status?: 'succeeded' | 'policy_rejected' | 'failed'
+    model_error?: string
+    model_route?: 'dm' | 'comment' | 'reject'
+    model_route_reason?: string
+    model_summary?: string
+    model_points?: { text: string; evidence_ref: string }[]
+    model_product_match?: string[]
+    model_uncertainties?: string[]
+    model_quality_flags?: string[]
+    model_meta?: { provider?: string; model?: string; prompt_version?: string; latency_ms?: number }
+    evidence?: string[]
   }
 }
 
@@ -55,15 +67,28 @@ type RiskEvent = {
   created_at: string
 }
 
-const API = 'http://127.0.0.1:8000'
+const API = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
+
+// Header values must be ASCII, so free text is reduced to a short hash.
+function keyPart(text: string): string {
+  let hash = 0
+  for (let index = 0; index < text.length; index += 1) hash = (Math.imul(hash, 31) + text.charCodeAt(index)) | 0
+  return (hash >>> 0).toString(36)
+}
 
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
+  // Spread options first: spreading it last replaced the merged headers and
+  // dropped Content-Type, so the API rejected the JSON body with 422.
   const response = await fetch(`${API}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...(options?.headers || {}) },
     ...options,
+    headers: { 'Content-Type': 'application/json', ...(options?.headers || {}) },
   })
   const body = await response.json()
-  if (!response.ok) throw new Error(typeof body.detail === 'string' ? body.detail : '请求未完成')
+  if (!response.ok) {
+    if (typeof body.detail === 'string') throw new Error(body.detail)
+    if (Array.isArray(body.detail)) throw new Error('提交的内容不符合要求：' + body.detail.map((item: { loc?: unknown[]; msg?: string }) => `${(item.loc || []).slice(1).join('.')} ${item.msg || ''}`).join('；'))
+    throw new Error('请求未完成')
+  }
   return body as T
 }
 
@@ -79,6 +104,10 @@ function App() {
   const [contactBasis, setContactBasis] = useState<ContactBasis>('cold_outreach')
   const [contactBasisNote, setContactBasisNote] = useState('')
   const [videoText, setVideoText] = useState('')
+  const [shopType, setShopType] = useState<ShopType>('suit_custom')
+  const [shopNote, setShopNote] = useState('')
+  const [activityNote, setActivityNote] = useState('')
+  const [purchaseSignalNote, setPurchaseSignalNote] = useState('')
   const [draft, setDraft] = useState('')
   const [scheduledFor, setScheduledFor] = useState('')
   const [resultNote, setResultNote] = useState('')
@@ -131,13 +160,17 @@ function App() {
     void runAction(async () => {
       const next = await api<Run>('/api/runs', {
         method: 'POST',
-        body: JSON.stringify({ shop_name: shopName, profile_url: profileUrl || null, contact_basis: contactBasis, contact_basis_note: contactBasisNote || null, video_text: videoText }),
+        body: JSON.stringify({ shop_name: shopName, profile_url: profileUrl || null, contact_basis: contactBasis, contact_basis_note: contactBasisNote || null, video_text: videoText, shop_type: shopType, shop_note: shopNote || null, activity_note: activityNote || null, purchase_signal_note: purchaseSignalNote || null }),
       })
       setShopName('')
       setProfileUrl('')
       setContactBasis('cold_outreach')
       setContactBasisNote('')
       setVideoText('')
+      setShopType('suit_custom')
+      setShopNote('')
+      setActivityNote('')
+      setPurchaseSignalNote('')
       return next
     })
   }
@@ -155,7 +188,7 @@ function App() {
     if (!selected) return
     void runAction(() => api<Run>(`/api/runs/${selected.id}/content`, {
       method: 'POST',
-      headers: { 'Idempotency-Key': `content-${selected.id}-${approved}-${draft}-${scheduledFor}` },
+      headers: { 'Idempotency-Key': `content-${selected.id}-${approved}-${keyPart(draft)}-${keyPart(scheduledFor)}` },
       body: JSON.stringify({ approved, edited_text: draft, scheduled_for: scheduledFor || null }),
     }))
   }
@@ -164,10 +197,23 @@ function App() {
     if (!selected) return
     void runAction(() => api<Run>(`/api/runs/${selected.id}/result`, {
       method: 'POST',
-      headers: { 'Idempotency-Key': `result-${selected.id}-${result}-${resultNote}` },
+      headers: { 'Idempotency-Key': `result-${selected.id}-${result}-${keyPart(resultNote)}` },
       body: JSON.stringify({ result, note: resultNote || null }),
     }))
   }
+
+  const endRun = () => {
+    if (!selected) return
+    if (!window.confirm('确定结束这条任务吗？结束后不会再联系这家店铺，已占用的当日配额会释放。')) return
+    void runAction(() => api<Run>(`/api/runs/${selected.id}/end`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': `end-${selected.id}` },
+      body: JSON.stringify({ reason: '人工结束任务' }),
+    }))
+  }
+
+  const openStages = ['route_review', 'content_review', 'scheduled', 'opened']
+  const reviewStages = ['route_review', 'content_review']
 
   const openOfficialPage = () => {
     if (!selected) return
@@ -177,6 +223,9 @@ function App() {
       headers: { 'Idempotency-Key': `open-${selected.id}` },
     }))
   }
+
+  const channelLabel: Record<string, string> = { dm: '私信', comment: '评论', none: '暂不触达' }
+  const suggestionText = (run: Run) => run.state.model_status === 'failed' ? '模型调用失败' : channelLabel[run.state.channel || run.state.suggested_channel || ''] || '待定'
 
   const stageLabel: Record<string, string> = {
     route_review: '路线审核', content_review: '文案审核', scheduled: '待人工打开', opened: '页面已打开', sent: '已发送',
@@ -217,10 +266,14 @@ function App() {
                 <label>店铺名称<input value={shopName} onChange={(event) => setShopName(event.target.value)} placeholder="例如：上海某某西装定制" /></label>
                 <label>主页地址（可选）<input value={profileUrl} onChange={(event) => setProfileUrl(event.target.value)} placeholder="用于识别同一店铺" /></label>
                 <label>联系依据<select value={contactBasis} onChange={(event) => setContactBasis(event.target.value as ContactBasis)}><option value="cold_outreach">首次陌生联系</option><option value="prior_conversation">已有真实交流</option><option value="inbound_inquiry">对方主动咨询</option><option value="explicit_permission">对方明确同意商务联系</option></select></label>
-                <label>依据备注（DM 必填）<input value={contactBasisNote} onChange={(event) => setContactBasisNote(event.target.value)} placeholder="记录互动或同意的事实依据" /></label>
-                <label>当前视频内容<textarea rows={3} value={videoText} onChange={(event) => setVideoText(event.target.value)} placeholder="粘贴公开内容，Agent 根据证据评分" /></label>
+                <label>联系依据备注（可选）<input value={contactBasisNote} onChange={(event) => setContactBasisNote(event.target.value)} placeholder="例如：此前在评论区交流过；留空则以模型引用的证据为依据" /></label>
+                <label>店铺类型<select value={shopType} onChange={(event) => setShopType(event.target.value as ShopType)}><option value="suit_custom">西装定制店</option><option value="menswear">成衣品牌 / 男装店</option><option value="apparel_studio">服装工作室</option><option value="content_creator">内容博主</option><option value="staff_account">店员个人号</option><option value="hobbyist">个人爱好者</option><option value="supplier">上游供应商</option><option value="other">其他（与服装无关）</option></select></label>
+                <label>活跃情况（可选）<input value={activityNote} onChange={(event) => setActivityNote(event.target.value)} placeholder="例如：近30天发布8条" /></label>
+                <label>店铺情况<textarea rows={2} value={shopNote} onChange={(event) => setShopNote(event.target.value)} placeholder="主页简介、定位、客单价、主营品类" /></label>
+                <label>采购信号（可选）<textarea rows={2} value={purchaseSignalNote} onChange={(event) => setPurchaseSignalNote(event.target.value)} placeholder="例如：近期在发内搭、针织相关内容" /></label>
+                <label>当前笔记或视频内容<textarea rows={3} value={videoText} onChange={(event) => setVideoText(event.target.value)} placeholder="粘贴公开内容，模型只能依据这里填写的事实" /></label>
               </div>
-              <button className="primary-button full" type="button" disabled={busy || !shopName.trim() || !videoText.trim()} onClick={createRun}><UserRound size={15} />开始评选</button>
+              <button className="primary-button full" type="button" disabled={busy || !shopName.trim() || !videoText.trim()} onClick={createRun}><UserRound size={15} />{busy ? '模型分析中…' : '开始评选'}</button>
             </section>
 
             <section className="panel">
@@ -228,7 +281,7 @@ function App() {
               <div className="run-list">
                 {runs.length === 0 && <p className="muted">暂无候选工作流</p>}
                 {runs.map((run) => <button className={`run-row ${run.id === selectedId ? 'selected' : ''}`} type="button" key={run.id} onClick={() => setSelectedId(run.id)}>
-                  <span className="run-avatar"><MessageCircle size={15} /></span><span className="run-copy"><strong>{run.state.shop_name}</strong><small>匹配度 {run.state.fit_score ?? '--'} · {run.state.channel || run.state.suggested_channel || '待定'}</small></span><span className={`badge ${run.stage === 'read_no_reply' ? 'warning' : run.stage === 'blocked' ? 'danger' : 'success'}`}>{stageLabel[run.stage] || run.stage}</span>
+                  <span className="run-avatar"><MessageCircle size={15} /></span><span className="run-copy"><strong>{run.state.shop_name}</strong><small>{suggestionText(run)}</small></span><span className={`badge ${run.stage === 'read_no_reply' ? 'warning' : run.stage === 'blocked' ? 'danger' : 'success'}`}>{stageLabel[run.stage] || run.stage}</span>
                 </button>)}
               </div>
             </section>
@@ -237,13 +290,29 @@ function App() {
           <section className="panel decision-panel">
             <div className="panel-heading"><div><p className="section-kicker">HUMAN REVIEW</p><h2>{selected ? selected.state.shop_name : '选择一条工作流'}</h2></div>{selected && <span className="badge warning">{stageLabel[selected.stage] || selected.stage}</span>}</div>
             {!selected && <div className="empty-state"><PauseCircle size={30} /><p>工作流完成评选后，会在这里进入人工审核。</p></div>}
-            {selected && selected.stage === 'route_review' && <div className="decision-content"><div className="recommendation"><ShieldCheck size={18} /><div><span>Agent 建议</span><strong>{selected.state.suggested_channel === 'dm' ? '私信' : '评论'}</strong><p>匹配度 {selected.state.fit_score ?? '--'}，请确认本次触达方式。</p></div></div><div className="choice-group"><button className="choice" type="button" onClick={() => decideRoute(selected.state.suggested_channel === 'dm' ? 'dm' : 'comment')}><Send size={16} /><span>采用 Agent 建议</span><small>{selected.state.suggested_channel === 'dm' ? '进入私信文案' : '进入评论文案'}</small></button><button className="choice" type="button" onClick={() => decideRoute(selected.state.suggested_channel === 'dm' ? 'comment' : 'dm')}><MessageCircle size={16} /><span>改用另一种方式</span><small>由人工重新选择触达渠道</small></button><button className="choice danger" type="button" onClick={() => decideRoute('none')}><X size={16} /><span>暂不触达</span><small>结束当前工作流</small></button></div></div>}
-            {selected && selected.stage === 'content_review' && <div className="decision-content"><div className="channel-label">{selected.state.channel === 'dm' ? <Send size={15} /> : <MessageCircle size={15} />} {selected.state.channel === 'dm' ? '私信文案' : '当前视频评论'}</div><textarea className="draft-editor" value={draft} onChange={(event) => setDraft(event.target.value)} /><div className="risk-row"><ShieldCheck size={14} />当前策略检查通过，仍需人工确认内容。</div><label className="schedule-field">定时提醒时间<input type="datetime-local" value={scheduledFor} onChange={(event) => setScheduledFor(event.target.value)} /></label><div className="button-row"><button className="secondary-button" type="button" disabled={busy} onClick={() => decideContent(false)}><X size={14} />驳回</button><button className="primary-button" type="button" disabled={busy} onClick={() => decideContent(true)}><Check size={14} />加入定时队列</button></div></div>}
+            {selected && openStages.includes(selected.stage) && <div className="end-bar"><span>{reviewStages.includes(selected.stage) ? '这条任务正在等你处理。48 小时内不处理，系统会自动结束它。' : '这条任务还没有完成。不想继续时可以手动结束，当日配额会释放。'}</span><button className="secondary-button" type="button" disabled={busy} onClick={endRun}><X size={14} />结束任务</button></div>}
+            {selected && selected.stage === 'route_review' && <div className="decision-content">
+              <div className="recommendation"><ShieldCheck size={18} /><div><span>模型建议</span><strong>{selected.state.model_status === 'failed' ? '模型调用失败' : channelLabel[selected.state.suggested_channel || 'none']}</strong><p>{selected.state.model_status === 'failed' ? selected.state.model_error : selected.state.model_route_reason || '请确认本次触达方式。'}</p></div></div>
+              {selected.state.model_status === 'succeeded' && <div className="model-detail">
+                {selected.state.model_summary && <div><span>店铺判断</span><p>{selected.state.model_summary}</p></div>}
+                {!!selected.state.model_points?.length && <div><span>个性化依据</span><ul>{selected.state.model_points.map((point) => <li key={point.evidence_ref + point.text}>{point.text}<em>{point.evidence_ref}</em></li>)}</ul></div>}
+                {!!selected.state.model_product_match?.length && <div><span>产品匹配点</span><ul>{selected.state.model_product_match.map((item) => <li key={item}>{item}</li>)}</ul></div>}
+                {!!selected.state.model_uncertainties?.length && <div><span>模型不确定的地方</span><ul>{selected.state.model_uncertainties.map((item) => <li key={item}>{item}</li>)}</ul></div>}
+                {!!selected.state.model_quality_flags?.length && <div><span>风险提示</span><ul>{selected.state.model_quality_flags.map((item) => <li key={item}>{item}</li>)}</ul></div>}
+                {!!selected.state.evidence?.length && <div><span>模型看到的证据</span><ul>{selected.state.evidence.map((item) => <li key={item}>{item}</li>)}</ul></div>}
+                {selected.state.model_meta && <small className="muted">{selected.state.model_meta.provider} · {selected.state.model_meta.model} · {selected.state.model_meta.prompt_version} · {selected.state.model_meta.latency_ms} ms</small>}
+              </div>}
+              <div className="choice-group">
+                {(['dm', 'comment'] as Channel[]).map((channel) => <button className="choice" type="button" key={channel} disabled={busy} onClick={() => decideRoute(channel)}>{channel === 'dm' ? <Send size={16} /> : <MessageCircle size={16} />}<span>{channelLabel[channel]}{selected.state.suggested_channel === channel ? '（模型建议）' : ''}</span><small>{selected.state.model_route === channel ? '使用模型草稿，进入文案审核' : '模型按这条路线重新生成草稿，约需 10 秒'}</small></button>)}
+                <button className="choice danger" type="button" disabled={busy} onClick={() => decideRoute('none')}><X size={16} /><span>暂不触达{selected.state.suggested_channel === 'none' && selected.state.model_status === 'succeeded' ? '（模型建议）' : ''}</span><small>结束当前工作流</small></button>
+              </div>
+            </div>}
+            {selected && selected.stage === 'content_review' && <div className="decision-content"><div className="channel-label">{selected.state.channel === 'dm' ? <Send size={15} /> : <MessageCircle size={15} />} {selected.state.channel === 'dm' ? '私信文案' : '当前视频评论'}</div><textarea className="draft-editor" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="模型没有生成草稿，请人工撰写" /><div className="risk-row"><ShieldCheck size={14} />{selected.state.model_route === selected.state.channel ? '草稿由模型生成，已通过策略检查，仍需人工确认内容。' : (draft ? '人工改了路线，模型已按新路线重新生成草稿，仍需人工确认内容。' : (selected.state.model_error || '模型没有生成草稿，请人工撰写；提交时仍会做策略检查。'))}</div>{selected.state.model_route === selected.state.channel && !!selected.state.model_points?.length && <div className="model-detail"><div><span>草稿引用的依据</span><ul>{selected.state.model_points.map((point) => <li key={point.evidence_ref + point.text}>{point.text}<em>{point.evidence_ref}</em></li>)}</ul></div></div>}<label className="schedule-field">定时提醒时间<input type="datetime-local" value={scheduledFor} onChange={(event) => setScheduledFor(event.target.value)} /></label><div className="button-row"><button className="secondary-button" type="button" disabled={busy} onClick={() => decideContent(false)}><X size={14} />驳回</button><button className="primary-button" type="button" disabled={busy || !draft.trim()} onClick={() => decideContent(true)}><Check size={14} />加入定时队列</button></div></div>}
             {selected && selected.stage === 'scheduled' && <div className="decision-content scheduled-state"><div className="success-icon"><Clock3 size={22} /></div><p>已加入人工发送队列</p><small>{selected.state.scheduled_for || '等待人工操作'}</small><button className="primary-button full" type="button" disabled={busy || summary?.status === 'frozen'} onClick={openOfficialPage}><Send size={15} />打开官方页面并记录</button></div>}
             {selected && selected.stage === 'opened' && <div className="decision-content scheduled-state"><div className="success-icon"><Send size={22} /></div><p>已记录打开官方页面</p><small>请在官方页面完成人工发送后再确认结果。</small><label>发送记录备注<input value={resultNote} onChange={(event) => setResultNote(event.target.value)} placeholder="可记录官方页面操作结果" /></label><button className="primary-button full" type="button" disabled={busy || summary?.status === 'frozen'} onClick={() => recordResult('sent')}><Check size={15} />确认已人工发送</button></div>}
             {selected && selected.stage === 'sent' && <div className="decision-content scheduled-state"><div className="success-icon"><Send size={22} /></div><p>已记录人工发送</p><small>若对方已读但在观察期内未回复，可终止后续触达。</small><label>结果备注<input value={resultNote} onChange={(event) => setResultNote(event.target.value)} placeholder="例如：已读超过观察期，未回复" /></label><div className="button-row"><button className="secondary-button" type="button" disabled={busy} onClick={() => recordResult('failed')}><AlertTriangle size={14} />记录异常</button><button className="primary-button" type="button" disabled={busy || !resultNote.trim()} onClick={() => recordResult('read_no_reply')}><ShieldCheck size={14} />标记已读无回复</button></div></div>}
             {selected && selected.stage === 'read_no_reply' && <div className="empty-state blocked-state"><ShieldCheck size={30} /><strong>已加入勿扰名单</strong><p>该店铺不会再进入后续评选，也不会创建新的触达任务。</p><small>{selected.state.result_note || '人工确认：已读无回复'}</small></div>}
-            {selected && (selected.stage === 'failed' || selected.stage === 'blocked') && <div className="empty-state blocked-state"><AlertTriangle size={30} /><strong>{selected.stage === 'failed' ? '已记录发送异常' : '当前任务已拦截'}</strong><p>{selected.state.result_note || '请检查风险记录和账号状态。'}</p></div>}
+            {selected && (selected.stage === 'failed' || selected.stage === 'blocked') && <div className="empty-state blocked-state"><AlertTriangle size={30} /><strong>{selected.stage === 'failed' ? '已记录发送异常' : (selected.state.result_note ? '任务已结束，不会联系这家店铺' : '当前任务已拦截')}</strong><p>{selected.state.result_note || '请检查风险记录和账号状态。'}</p></div>}
           </section>
         </div>}
         {view === 'queue' && <section className="panel page-panel">
