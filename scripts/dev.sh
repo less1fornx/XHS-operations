@@ -21,7 +21,11 @@ if [ "${LAN:-0}" = "1" ]; then
     echo "没有找到局域网地址，请确认电脑已连接 Wi-Fi 或网线。" >&2
     exit 1
   fi
-  # Other devices must enter this code; keep the same one by setting AGENT_ACCESS_CODE.
+  # A fixed code can live in .env; otherwise a new one is generated on every start.
+  if [ -z "${AGENT_ACCESS_CODE:-}" ] && [ -f "$ROOT/.env" ]; then
+    AGENT_ACCESS_CODE="$(sed -n 's/^AGENT_ACCESS_CODE=//p' "$ROOT/.env" | tail -1 | tr -d '[:space:]')"
+  fi
+  # Other devices must enter this code.
   export AGENT_ACCESS_CODE="${AGENT_ACCESS_CODE:-$(printf '%06d' $(( (RANDOM * 32768 + RANDOM) % 1000000 )))}"
 fi
 
