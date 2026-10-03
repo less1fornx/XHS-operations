@@ -1,0 +1,221 @@
+{
+  "summary": {
+    "total": 6,
+    "passed": 6,
+    "pass_rate": 1.0,
+    "route_accuracy": 1.0,
+    "provider": "qwen",
+    "model": "qwen3.7-plus-2026-05-26",
+    "policy_gate_rejects": 3,
+    "provider_errors": 0,
+    "missing_required_cases": 0,
+    "forbidden_hit_cases": 0,
+    "invalid_ref_cases": 0
+  },
+  "cases": [
+    {
+      "case_id": "XHS-2026-0001",
+      "passed": true,
+      "route_correct": true,
+      "expected_route": "dm",
+      "actual_route": "dm",
+      "missing_required": [],
+      "forbidden_hits": [],
+      "invalid_evidence_refs": [],
+      "provider": "qwen",
+      "model": "qwen3.7-plus-2026-05-26",
+      "prompt_version": "lead-outreach-v4",
+      "latency_ms": 9440,
+      "output": {
+        "route": "dm",
+        "route_reason": "目标店铺为西装定制店，近期持续发布试衣案例和面料内容，业务匹配度高。虽无明确采购信号，但作为陌生B2B线索，符合低压力一次性私信触达的条件。需人工审核草稿以确保语气自然且合规。",
+        "shop_business_summary": "杭州衡度西服定制，主营商务与婚礼场景男士西装定制，近30天活跃，持续展示量体和试衣内容，定位中高端。",
+        "evidence_refs": [
+          "e1",
+          "e2"
+        ],
+        "personalization_points": [
+          {
+            "text": "注意到贵店近期在分享春夏轻薄西装的试衣案例，关注如何兼顾挺括与透气。",
+            "evidence_ref": "e1"
+          },
+          {
+            "text": "账号持续更新定制案例，展现了专业的量体与交付过程。",
+            "evidence_ref": "e2"
+          }
+        ],
+        "product_match": [
+          "我们是毛衫工厂，为西装定制店提供西装内搭，款式不限，一件起订，一件也可以做",
+          "累计已承接过约200家不同西装定制店的业务",
+          "注重纱线、细节和做工，品质有保障",
+          "内搭是西装定制店的附加业务：客人订西装时可以一起搭配；店里只需留一件样衣，没有存货压力，有订单再下单"
+        ],
+        "draft": "您好，关注到贵店近期在分享春夏轻薄西装的试衣案例，很专业。我们是毛衫工厂，专为西装定制店提供内搭（如夏季针织Polo等），支持一件起订。目前已服务约200家定制店，注重纱线与做工，品质有保障。内搭可作为西装定制的附加选项，店内无需备货，有单再下即可。不知贵店目前是否有西装内搭方面的需求？",
+        "quality_flags": [],
+        "uncertainties": [
+          "店铺虽有活跃内容和试衣案例，但未明确表达寻找内搭供应商的意图，合作意向需进一步确认。"
+        ],
+        "human_review_required": true
+      },
+      "error": null
+    },
+    {
+      "case_id": "XHS-2026-0004",
+      "passed": true,
+      "route_correct": true,
+      "expected_route": "reject",
+      "actual_route": "reject",
+      "missing_required": [],
+      "forbidden_hits": [],
+      "invalid_evidence_refs": [],
+      "provider": "qwen",
+      "model": "qwen3.7-plus-2026-05-26",
+      "prompt_version": "lead-outreach-v4",
+      "latency_ms": 3674,
+      "output": {
+        "route": "reject",
+        "route_reason": "店铺主营家居软装（e1），与西装定制及服装采购业务无关，不符合目标客户画像。",
+        "shop_business_summary": "主营家居摆件和软装内容，非服装行业。",
+        "evidence_refs": [
+          "e1"
+        ],
+        "personalization_points": [],
+        "product_match": [],
+        "draft": "",
+        "quality_flags": [],
+        "uncertainties": [],
+        "human_review_required": true
+      },
+      "error": null
+    },
+    {
+      "case_id": "XHS-2026-0005",
+      "passed": true,
+      "route_correct": true,
+      "expected_route": "reject",
+      "actual_route": "reject",
+      "missing_required": [],
+      "forbidden_hits": [],
+      "invalid_evidence_refs": [],
+      "provider": "policy_gate",
+      "model": "prior-outcome-gate-v1",
+      "prompt_version": "",
+      "latency_ms": 0,
+      "output": {
+        "route": "reject",
+        "route_reason": "历史联系结果为 read_no_reply，按勿扰规则停止联系",
+        "shop_business_summary": "主营中高客单价西装定制",
+        "evidence_refs": [
+          "e1"
+        ],
+        "personalization_points": [],
+        "product_match": [],
+        "draft": "",
+        "quality_flags": [
+          "repeat_contact"
+        ],
+        "uncertainties": [],
+        "human_review_required": true
+      },
+      "error": null
+    },
+    {
+      "case_id": "XHS-2026-0006",
+      "passed": true,
+      "route_correct": true,
+      "expected_route": "comment",
+      "actual_route": "comment",
+      "missing_required": [],
+      "forbidden_hits": [],
+      "invalid_evidence_refs": [],
+      "provider": "qwen",
+      "model": "qwen3.7-plus-2026-05-26",
+      "prompt_version": "lead-outreach-v4",
+      "latency_ms": 5915,
+      "output": {
+        "route": "comment",
+        "route_reason": "店铺内容专业且活跃，但无明确采购信号（purchase_signal_note 为 null），属于冷启动阶段。根据业务上下文建议先进行非销售型内容互动以建立信任，符合 comment 路线规则。",
+        "shop_business_summary": "成都裁衣研究所是一家专注于西装定制的服装工作室，近期持续发布关于版型分析和试衣复盘的专业内容，定位中高端市场。",
+        "evidence_refs": [
+          "e1"
+        ],
+        "personalization_points": [
+          {
+            "text": "针对其发布的关于肩线位置如何影响整体比例的内容进行具体互动。",
+            "evidence_ref": "e1"
+          }
+        ],
+        "product_match": [],
+        "draft": "这篇关于肩线位置的演示很直观！确实，肩点哪怕只移动一两厘米，视觉上的头肩比和精气神都会完全不一样。这种对细节的把控正是定制的魅力所在。",
+        "quality_flags": [],
+        "uncertainties": [
+          "店铺目前仅展示专业技术内容，未提及内搭销售或供应链需求，不确定是否有引入针织内搭的计划。"
+        ],
+        "human_review_required": true
+      },
+      "error": null
+    },
+    {
+      "case_id": "XHS-2026-0007",
+      "passed": true,
+      "route_correct": true,
+      "expected_route": "reject",
+      "actual_route": "reject",
+      "missing_required": [],
+      "forbidden_hits": [],
+      "invalid_evidence_refs": [],
+      "provider": "policy_gate",
+      "model": "prior-outcome-gate-v1",
+      "prompt_version": "",
+      "latency_ms": 0,
+      "output": {
+        "route": "reject",
+        "route_reason": "历史联系结果为 declined，按勿扰规则停止联系",
+        "shop_business_summary": "主营婚礼与商务西装定制，业务方向匹配",
+        "evidence_refs": [
+          "e1"
+        ],
+        "personalization_points": [],
+        "product_match": [],
+        "draft": "",
+        "quality_flags": [
+          "repeat_contact"
+        ],
+        "uncertainties": [],
+        "human_review_required": true
+      },
+      "error": null
+    },
+    {
+      "case_id": "XHS-2026-0008",
+      "passed": true,
+      "route_correct": true,
+      "expected_route": "reject",
+      "actual_route": "reject",
+      "missing_required": [],
+      "forbidden_hits": [],
+      "invalid_evidence_refs": [],
+      "provider": "policy_gate",
+      "model": "prior-outcome-gate-v1",
+      "prompt_version": "",
+      "latency_ms": 0,
+      "output": {
+        "route": "reject",
+        "route_reason": "历史联系结果为 blocked，按勿扰规则停止联系",
+        "shop_business_summary": "主营高客单价商务西装定制，业务方向匹配",
+        "evidence_refs": [
+          "e1"
+        ],
+        "personalization_points": [],
+        "product_match": [],
+        "draft": "",
+        "quality_flags": [
+          "repeat_contact"
+        ],
+        "uncertainties": [],
+        "human_review_required": true
+      },
+      "error": null
+    }
+  ]
+}

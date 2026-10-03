@@ -135,6 +135,26 @@ export default function ScreeningView({ onOpenWorkflow }: { onOpenWorkflow: () =
     }
   }
 
+  // Human correction of a misread shop type; the server re-tiers the whole batch.
+  const correctType = async (key: string, shopType: string) => {
+    if (!batch) return
+    setBusy(true)
+    setError('')
+    try {
+      const next = await api<Batch>(`/api/batches/${batch.id}/shops/${key}/correct`, { method: 'POST', body: JSON.stringify({ shop_type: shopType }) })
+      setBatch(next)
+      setDecisions((current) => {
+        const merged: Record<string, Decision> = {}
+        for (const item of next.ranked) merged[item.shop_key] = { tier_feedback: current[item.shop_key]?.tier_feedback ?? null, note: current[item.shop_key]?.note ?? '', route: item.screening?.suggested_route || 'none' }
+        return merged
+      })
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '改正未完成')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const updateDecision = (key: string, patch: Partial<Decision>) =>
     setDecisions((current) => ({ ...current, [key]: { ...current[key], ...patch } }))
 
@@ -197,7 +217,7 @@ export default function ScreeningView({ onOpenWorkflow }: { onOpenWorkflow: () =
             return <article className={`shop-card tier-${s.tier}`} key={item.shop_key}>
               <header>
                 <span className="rank">#{item.rank}</span>
-                <div><strong>{e.shop_name}</strong><small>{typeLabel[e.shop_type] || e.shop_type} · {e.account_kind === 'enterprise_verified' ? '企业认证' : '个人号'}{e.followers_text ? ` · 粉丝 ${e.followers_text}` : ''}{s.latest_post_age_days !== null ? ` · 最近更新 ${s.latest_post_age_days} 天前` : ''}</small></div>
+                <div><strong>{e.shop_name}</strong><small>{locked ? (typeLabel[e.shop_type] || e.shop_type) : <select className="type-select" value={e.shop_type} disabled={busy} title="模型认错了就在这里改，改完会按规则重新分档" onChange={(event) => void correctType(item.shop_key, event.target.value)}>{Object.entries(typeLabel).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select>} · {e.account_kind === 'enterprise_verified' ? '企业认证' : '个人号'}{e.followers_text ? ` · 粉丝 ${e.followers_text}` : ''}{s.latest_post_age_days !== null ? ` · 最近更新 ${s.latest_post_age_days} 天前` : ''}</small></div>
                 <span className={`badge ${tierBadge[s.tier]}`}>{tierLabel[s.tier]}</span>
               </header>
               <div className="thumbs">{item.image_paths.map((path) => <a href={imageUrl(path)} target="_blank" rel="noreferrer" key={path}><img src={imageUrl(path)} alt="截图" onError={(event) => { event.currentTarget.replaceWith(Object.assign(document.createElement('span'), { className: 'muted', textContent: '原图已删除' })) }} /></a>)}</div>

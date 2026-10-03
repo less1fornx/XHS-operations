@@ -79,3 +79,4 @@ button:disabled { cursor:not-allowed; opacity:.55; }
 .sticky-actions { position: sticky; bottom: 0; margin-top: 16px; padding: 12px 0; background: inherit; justify-content: space-between; align-items: center; }
 .draft-status { margin-top: 16px; display: grid; gap: 6px; font-size: 13px; }
 .draft-status p { margin: 0; }
+.type-select { display: inline-block; width: auto; padding: 1px 4px; font-size: 11px; border-radius: 4px; }

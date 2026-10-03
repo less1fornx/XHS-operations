@@ -191,7 +191,7 @@ React/Vite Web
 - Phase 2A：完成基础骨架，包括结构化输入输出、版本化 Prompt、Qwen/Mock Provider、证据引用校验和固定案例评测。
 - Phase 2C：截图批量初筛已跑通（读图 → 规则分档 → 批量审核 → 自动起草），规则 v0。
 - Phase 2B：主链路已端到端跑通（录入 → 模型建议 → 人工路线审核 → 文案审核 → 加入提醒队列），模型调用已持久化。尚未完成结果反馈窗口、周期分析和真实样本评测集。
-- 当前自动测试：36 项通过。
+- 当前自动测试：37 项通过。
 - 当前 Mock 评测：正式集 6/6 通过，其中 3 个由 Policy Gate 直接拒绝、未调用 Provider。该结果只证明流程和测试规则可运行，不代表 Qwen 的真实准确率。
 - Qwen 已于 2026-10-02 完成首次真实评测：正式集 6/6 通过，但其中只有 3 个是真实模型调用，样本过少，不能视为准确率。
 
@@ -202,8 +202,8 @@ React/Vite Web
 - 生成入口（先 Policy Gate，后模型调用）：`packages/agent_core/pipeline.py`
 - Prompt 构建：`packages/agent_core/prompting.py`
 - 评测：`packages/agent_core/evaluation.py`
-- 当前 Prompt：`prompts/lead_outreach/v3/system.md`（v1、v2 保留）
-- 产品事实：`config/product_facts.v1.json`
+- 当前 Prompt：`prompts/lead_outreach/v4/system.md`（v1 至 v3 保留）；读图 Prompt：`prompts/shop_extraction/v1/system.md`
+- 产品事实：`config/product_facts.v2.json`（v1 保留）
 - 工作流图：`labs/phase0-langgraph/src/phase0_graph/lead_workflow.py`
 - 模型输入构造与落库：`services/worker/lead_generation.py`
 - 固定案例：`evals/phase2_cases.v1.json`
@@ -547,6 +547,20 @@ Phase 2B 将 QwenProvider 接入 FastAPI/Worker 时，需要选择：
 **用户最终决定**：（待填写）
 
 ## 8. 最近交接记录
+
+### 2026-10-03｜Claude｜纠正产品定位、启动脚本、读图结果改正入口
+
+- 目的：落实用户三条反馈。
+- 产品定位纠正（用户 2026-10-03）：我方为西装定制店提供**西装内搭**，款式不限，是对方实体店的附加业务（客人订西装时顺带搭配），不是让对方开拓针织品类或建立针织供应链。
+  - 新增 `config/product_facts.v2.json`，`lead_generation.py` 改读 v2。
+  - 新增 `prompts/lead_outreach/v4/system.md`：定位规则；私信必须包含用户确认的三个核心卖点（工厂且“一件起订”原样四字、约 200 家西装定制店、品质有保障）。`PROMPT_VERSION=lead-outreach-v4`。
+  - `screening.py` 切入点与信号文案改为“内搭”表述；`docs/project-memory.md` 同步定位。
+  - 评测案例 XHS-2026-0001 增加 `must_include` “内搭”“200”和 `must_not_include` “针织供应链”“补充针织品类”等。
+- 启动脚本：新增 `scripts/dev.sh`，先执行数据库迁移，再启动 API 与前端，端口占用时给出提示，Ctrl+C 只停止自己启动的进程（含 npm 拉起的 vite）。README 已更新。
+- 读图结果改正：`POST /api/batches/{id}/shops/{key}/correct` 修改店铺类型后按同一规则重新分档、排序、分配路线，改正记录存入批次的 `corrections`；排序逻辑抽为 `rank_results()` 供图节点和接口共用；前端卡片上的类型可直接修改。
+- 验证：`pytest` 37 passed；前端构建通过；Qwen 固定案例评测 6/6（v4，含新增的定位与卖点检查）；用真实截图提取结果重新生成萨维诺、制一两条私信，定位已改为西装内搭；`dev.sh` 在伪终端中验证启动、两个服务均可访问、Ctrl+C 后无残留进程；改正功能经浏览器验证。
+- 发现的问题：`apps/web/node_modules/.vite/deps` 属于 root（2026-10-02 17:01 曾以 sudo 启动前端），会导致普通权限启动前端失败。`dev.sh` 会检测并提示用户执行 `sudo rm -rf apps/web/node_modules/.vite`，需用户本人执行。
+- 未完成事项：分档标注一致率汇总；读图改正目前只支持店铺类型。
 
 ### 2026-10-03｜Claude｜Phase 2C 截图批量初筛：读图、规则分档、批量审核、自动起草
 

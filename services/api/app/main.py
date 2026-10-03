@@ -38,12 +38,13 @@ from packages.agent_core.screening import (  # noqa: E402
     MAX_SHOPS_PER_BATCH,
     ShopExtraction,
     ShopScreening,
+    ShopType as ScreeningShopType,
     to_lead_context,
     today_in_shanghai,
 )
 from packages.agent_core.vision import shop_extractor_from_env  # noqa: E402
 from services.worker.screening import UPLOAD_ROOT, make_read_shop, purge_old_uploads  # noqa: E402
-from services.worker.screening_graph import build_batch_graph  # noqa: E402
+from services.worker.screening_graph import build_batch_graph, rank_results  # noqa: E402
 
 
 Channel = Literal["dm", "comment", "none"]
@@ -639,6 +640,36 @@ def draft_selected_shops(batch_id: str, selected: list[tuple[dict[str, Any], str
         if len(payload["drafts"]) == len(selected):
             payload["status"] = "drafted"
         store.save_batch(batch_id, payload.get("status", "drafting"), payload)
+
+
+class ShopCorrection(BaseModel):
+    shop_type: ScreeningShopType
+
+
+@app.post("/api/batches/{batch_id}/shops/{shop_key}/correct")
+def correct_batch_shop(batch_id: str, shop_key: str, payload: ShopCorrection) -> dict[str, Any]:
+    """Human fixes what the model misread; the shop is re-tiered by the same rules."""
+    current = store.get_batch(batch_id)
+    if not current:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    if current["status"] != "awaiting_review":
+        raise HTTPException(status_code=409, detail="只有待审核的批次可以改正识别结果")
+    target = next((r for r in current["results"] if r["shop_key"] == shop_key and r["status"] == "read"), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="找不到这家店的识别结果")
+    before = target["extraction"]["shop_type"]
+    target["extraction"]["shop_type"] = payload.shop_type
+    current["corrections"] = [
+        *current.get("corrections", []),
+        {"shop_key": shop_key, "field": "shop_type", "before": before, "after": payload.shop_type,
+         "at": datetime.now().isoformat()},
+    ]
+    current["ranked"] = rank_results(
+        current["results"], today_in_shanghai(), lambda name: store.is_do_not_contact(name),
+        current["dm_slots"], current["comment_slots"],
+    )
+    store.save_batch(batch_id, current["status"], current)
+    return current
 
 
 @app.post("/api/batches/{batch_id}/review")

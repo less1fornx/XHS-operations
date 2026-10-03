@@ -18,7 +18,7 @@ from packages.agent_core.vision import MockShopExtractor
 from services.api.app.models import ModelInvocation
 from services.api.app.storage import RunStore
 from services.worker.screening import make_read_shop, purge_old_uploads
-from services.worker.screening_graph import build_batch_graph
+from services.worker.screening_graph import build_batch_graph, rank_results
 
 
 TODAY = date(2026, 10, 3)
@@ -174,3 +174,20 @@ def test_old_screenshot_folders_are_purged(tmp_path) -> None:
 
     assert removed == ["old-batch"]
     assert fresh.exists() and not old.exists()
+
+
+def test_correcting_shop_type_re_tiers_the_shop() -> None:
+    misread = shop(
+        shop_type="content_creator",
+        fabric_mentions=["Loro Piana"],
+        high_end_mentions=["高定"],
+        recent_post_dates=["昨天"],
+    )
+    results = [{"shop_key": "shop_0", "status": "read", "extraction": misread.model_dump()}]
+    before = rank_results(results, TODAY, lambda name: False, 5, 3)
+    results[0]["extraction"]["shop_type"] = "suit_custom"
+    after = rank_results(results, TODAY, lambda name: False, 5, 3)
+
+    assert before[0]["screening"]["tier"] == "medium"
+    assert after[0]["screening"]["tier"] == "high"
+    assert after[0]["screening"]["suggested_route"] == "dm"

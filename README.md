@@ -34,6 +34,17 @@ agent-app/
 
 先在一个终端启动 API：
 
+一条命令同时启动后台和前端（会先检查数据库结构，按 Ctrl+C 同时停止）：
+
+```bash
+cd /Users/askvenht/AI/agent-app
+./scripts/dev.sh
+```
+
+端口被占用时可以换端口：`API_PORT=8001 WEB_PORT=5174 ./scripts/dev.sh`。
+
+也可以分别手动启动：
+
 ```bash
 cd /Users/askvenht/AI/agent-app
 uv run alembic upgrade head

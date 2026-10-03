@@ -65,6 +65,40 @@ def classify_error(exc: Exception) -> str:
     return "system" if isinstance(exc.__cause__, httpx.HTTPError) else "unreadable"
 
 
+def rank_results(
+    results: list[dict[str, Any]],
+    today: date,
+    is_do_not_contact: Callable[[str], bool],
+    dm_slots: int,
+    comment_slots: int,
+) -> list[dict[str, Any]]:
+    """Tier, order and route every readable shop. Also used after a human correction."""
+    seen: set[str] = set()
+    scored: list[tuple[tuple, dict[str, Any], Any]] = []
+    for result in sorted(results, key=lambda item: item["shop_key"]):
+        if result["status"] != "read":
+            continue
+        extraction = ShopExtraction.model_validate(result["extraction"])
+        screening = screen_shop(extraction, today)
+        name = extraction.shop_name.strip()
+        # Deterministic checks the model never gets a say in.
+        if is_do_not_contact(name):
+            screening.tier = "excluded"
+            screening.tier_reasons = ["已在勿扰名单中"]
+        elif name in seen:
+            screening.tier = "excluded"
+            screening.tier_reasons = ["本批中重复上传的店铺"]
+        seen.add(name)
+        scored.append((rank_key(screening, extraction), result, screening))
+
+    scored.sort(key=lambda item: item[0])
+    assign_routes([item[2] for item in scored], dm_slots, comment_slots)
+    return [
+        {**result, "screening": screening.model_dump(), "rank": index + 1}
+        for index, (_, result, screening) in enumerate(scored)
+    ]
+
+
 def build_batch_graph(
     read_shop_fn: ReadShop,
     is_do_not_contact: Callable[[str], bool],
@@ -91,31 +125,9 @@ def build_batch_graph(
         return {"results": [{**shop, "status": "read", "extraction": extraction.model_dump()}]}
 
     def rank(state: BatchState) -> dict:
-        today = today_fn()
-        seen: set[str] = set()
-        scored: list[tuple[tuple, dict[str, Any], Any]] = []
-        for result in sorted(state["results"], key=lambda item: item["shop_key"]):
-            if result["status"] != "read":
-                continue
-            extraction = ShopExtraction.model_validate(result["extraction"])
-            screening = screen_shop(extraction, today)
-            name = extraction.shop_name.strip()
-            # Deterministic checks the model never gets a say in.
-            if is_do_not_contact(name):
-                screening.tier = "excluded"
-                screening.tier_reasons = ["已在勿扰名单中"]
-            elif name in seen:
-                screening.tier = "excluded"
-                screening.tier_reasons = ["本批中重复上传的店铺"]
-            seen.add(name)
-            scored.append((rank_key(screening, extraction), result, screening))
-
-        scored.sort(key=lambda item: item[0])
-        assign_routes([item[2] for item in scored], state["dm_slots"], state["comment_slots"])
-        ranked = [
-            {**result, "screening": screening.model_dump(), "rank": index + 1}
-            for index, (_, result, screening) in enumerate(scored)
-        ]
+        ranked = rank_results(
+            state["results"], today_fn(), is_do_not_contact, state["dm_slots"], state["comment_slots"]
+        )
         return {"ranked": ranked, "status": "awaiting_review"}
 
     def batch_review(state: BatchState) -> dict:

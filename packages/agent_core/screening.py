@@ -210,9 +210,9 @@ def content_angles(extraction: ShopExtraction) -> list[str]:
     if extraction.fabric_mentions:
         angles.append("对方讲究面料：先聊纱线和材质（如亚麻、羊绒），少谈价格")
     if extraction.knitwear_present == "no":
-        angles.append("店里还没有针织品类：强调只需留一件样衣、没有存货压力")
+        angles.append("店里还没有内搭：讲清内搭是西装的附加单品，客人订西装时顺带搭配，只需留一件样衣、没有存货压力")
     if extraction.knitwear_present == "yes":
-        angles.append("已在做针织或衬衫：强调一件起订、可按客人尺寸定制")
+        angles.append("已在搭配内搭或针织：强调款式不限、一件起订、可按客人尺寸定制")
     if extraction.account_kind == "enterprise_verified":
         angles.append("企业号：写短一些，方便客服转交负责人")
     if extraction.shop_type == "content_creator":
@@ -253,9 +253,9 @@ def to_lead_context(extraction: ShopExtraction, screening: ShopScreening) -> dic
     if extraction.fabric_mentions:
         signal_lines.append("内容涉及面料：" + "；".join(extraction.fabric_mentions[:5]))
     if extraction.knitwear_present == "yes":
-        signal_lines.append("内容中已出现针织品类")
+        signal_lines.append("内容中已出现针织或内搭")
     elif extraction.knitwear_present == "no":
-        signal_lines.append("内容中未见针织品类")
+        signal_lines.append("内容中未见针织或内搭")
     activity = (
         f"最近一次更新约 {screening.latest_post_age_days} 天前"
         if screening.latest_post_age_days is not None
