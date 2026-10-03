@@ -191,7 +191,7 @@ React/Vite Web
 - Phase 2A：完成基础骨架，包括结构化输入输出、版本化 Prompt、Qwen/Mock Provider、证据引用校验和固定案例评测。
 - Phase 2C：截图批量初筛已跑通（读图 → 规则分档 → 批量审核 → 自动起草），规则 v0。
 - Phase 2B：主链路已端到端跑通（录入 → 模型建议 → 人工路线审核 → 文案审核 → 加入提醒队列），模型调用已持久化。尚未完成结果反馈窗口、周期分析和真实样本评测集。
-- 当前自动测试：39 项通过。
+- 当前自动测试：49 项通过。
 - 当前 Mock 评测：正式集 6/6 通过，其中 3 个由 Policy Gate 直接拒绝、未调用 Provider。该结果只证明流程和测试规则可运行，不代表 Qwen 的真实准确率。
 - Qwen 已于 2026-10-02 完成首次真实评测：正式集 6/6 通过，但其中只有 3 个是真实模型调用，样本过少，不能视为准确率。
 
@@ -557,6 +557,21 @@ Claude 的立场：不实现自动发送。理由不只是账号风险：自动�
 **用户最终决定**：（待填写）
 
 ## 8. 最近交接记录
+
+### 2026-10-03｜Claude｜数据层第 1 步：联系时快照与回复记录
+
+- 目的：按 `docs/roadmap-and-learning.md` 第 1 步，补上“发送之后发生了什么”的记录。字段、标签和阶段由用户设计（见 `docs/project-memory.md`“发送后的结果记录”），Claude 梳理并实现。
+- 用户未明确回答的两点，Claude 采用了默认做法并已告知用户：15 天未回复的店进入勿扰名单，之后若对方回复则移出；回复内容同时支持上传截图和手动粘贴。
+- 修改文件：
+  - 新增 `packages/agent_core/outcomes.py`：标签分组、阶段、3 天与 15 天规则、“想了解产品”的推导、联系方式清除，版本 `outcome-rules-v1`。
+  - `packages/agent_core/vision.py`、`prompts/reply_extraction/v1/system.md`：读取私信截图，摘抄对方原话并建议标签；企业号自动回复不算回复。
+  - `services/api/app/models.py`、迁移 `d7f3b1c8e5a2`：`outreach_outcomes` 新增回复时间、时效、原话、标签、阶段；新增 `contact_snapshots`。
+  - `services/api/app/storage.py`：`save_contact_snapshot()`、`record_reply()`、`unanswered_runs()`、`list_reply_records()`。
+  - `services/api/app/main.py`：确认发送时保存快照；`POST /api/runs/{id}/reply`、`POST /api/runs/{id}/reply/read`、`GET /api/outcome-options`、`GET /api/reply-records`；批量初筛入选的店把分档信息带入任务；列表刷新和 Worker 轮询时执行 15 天规则。
+  - 前端：新增 `apps/web/src/Reply.tsx`；列表新增“等回复”分组，新增“已回复”阶段。
+- 验证：`pytest` 49 passed；迁移在副本上升级、降级、再升级，`alembic check` 无差异；真实 Qwen 读取 3 张不含联系方式的真实私信截图，对方原话和标签均正确，主页截图被识别为非私信；无头浏览器走通“发送 → 上传截图读出回复 → 保存 → 更新阶段”，并确认新标签页落在小红书搜索该店名的地址（请求已拦截，未真正访问）。
+- 真实数据库：已备份为 `data/agent_ops.backup-20261003-pre-replies.db` 并升级到 `d7f3b1c8e5a2`。
+- 未完成事项：此前已发送的任务没有联系时快照；草稿标注和标注汇总属于第 2 步。
 
 ### 2026-10-03｜Claude｜没有主页地址时打开小红书搜索
 

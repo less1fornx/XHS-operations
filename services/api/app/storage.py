@@ -11,6 +11,7 @@ from sqlmodel import Session, create_engine, select
 
 from .models import (
     AuditLog,
+    ContactSnapshot,
     ContentEvidence,
     HumanReview,
     ModelInvocation,
@@ -44,6 +45,11 @@ class BusinessRuleError(Exception):
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _aware(value: datetime) -> datetime:
+    """SQLite returns naive datetimes; they were stored in UTC."""
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
 class RunStore:
@@ -554,6 +560,207 @@ class RunStore:
                 event_type="run_expired",
             )
         return stale
+
+    def save_contact_snapshot(self, run_id: str, state: dict[str, Any]) -> None:
+        """Freeze what we knew and what we sent, once, when the human confirms sending."""
+        with Session(self.engine) as session:
+            existing = session.exec(
+                select(ContactSnapshot).where(ContactSnapshot.run_id == run_id)
+            ).first()
+            if existing is not None:
+                return
+            screening = state.get("screening_snapshot") or {}
+            meta = state.get("model_meta") or {}
+            session.add(
+                ContactSnapshot(
+                    run_id=run_id,
+                    shop_lead_id=state.get("lead_id"),
+                    sent_at=utc_now(),
+                    channel=state.get("channel") or "dm",
+                    final_text=state.get("draft") or "",
+                    tier=screening.get("tier"),
+                    shop_type=state.get("shop_type"),
+                    features_json=json.dumps(
+                        {
+                            "signals": screening.get("signals", {}),
+                            "content_angles": screening.get("content_angles", []),
+                            "latest_post_age_days": screening.get("latest_post_age_days"),
+                            "account_kind": screening.get("account_kind"),
+                            "contact_basis": state.get("contact_basis"),
+                            "model_route": state.get("model_route"),
+                            "suggested_channel": state.get("suggested_channel"),
+                            "draft_edited_by_human": bool(
+                                state.get("model_draft") and state.get("model_draft") != state.get("draft")
+                            ),
+                        },
+                        ensure_ascii=False,
+                    ),
+                    versions_json=json.dumps(
+                        {
+                            "screening_rules": screening.get("rules_version"),
+                            "prompt": meta.get("prompt_version"),
+                            "model": meta.get("model"),
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+            )
+            session.commit()
+
+    def record_reply(
+        self,
+        run_id: str,
+        *,
+        replied: bool,
+        stage: str,
+        ask_tags: list[str],
+        reply_text: str | None,
+        replied_at: datetime | None,
+        note: str | None,
+        keep_do_not_contact: bool,
+        timing_fn,
+        system: bool = False,
+    ) -> dict[str, Any]:
+        """Record the first reply (or the lack of one) and where the lead stands now."""
+        with self.quota_lock, Session(self.engine) as session:
+            snapshot = session.get(RunSnapshot, run_id)
+            if snapshot is None:
+                raise BusinessRuleError("run_not_found", "工作流不存在")
+            if snapshot.stage not in ("sent", "replied", "read_no_reply"):
+                raise BusinessRuleError("invalid_transition", "只有已发送的任务可以记录回复")
+            task = session.exec(
+                select(OutreachTask).where(OutreachTask.workflow_run_id == run_id)
+            ).first()
+            if task is None:
+                raise BusinessRuleError("outreach_task_not_found", "找不到对应的触达任务")
+            contact = session.exec(
+                select(ContactSnapshot).where(ContactSnapshot.run_id == run_id)
+            ).first()
+            sent_at = (contact.sent_at if contact else None) or task.sent_at or snapshot.updated_at
+            now = utc_now()
+
+            outcome = session.exec(
+                select(OutreachOutcome).where(OutreachOutcome.outreach_task_id == task.id)
+            ).first()
+            if outcome is None:
+                outcome = OutreachOutcome(
+                    outreach_task_id=task.id, shop_lead_id=task.shop_lead_id, reply_status="no_reply"
+                )
+                session.add(outcome)
+            outcome.reply_status = (
+                "declined" if replied and keep_do_not_contact and stage == "replied_no_intent" else
+                "replied" if replied else "no_reply"
+            )
+            if replied:
+                # Keep the first reply's time: later updates only move the stage.
+                outcome.replied_at = outcome.replied_at or replied_at or now
+                outcome.reply_timing = timing_fn(_aware(sent_at), _aware(outcome.replied_at))
+                if reply_text is not None:
+                    outcome.reply_text = reply_text
+                outcome.ask_tags_json = json.dumps(ask_tags, ensure_ascii=False)
+            outcome.stage = stage
+            outcome.conversion_status = "won" if stage == "won" else "lost" if stage == "lost" else "open"
+            if stage == "won":
+                outcome.converted_at = outcome.converted_at or now
+            outcome.human_notes = note or outcome.human_notes
+            outcome.source = "system_timeout" if system else "human_api"
+            outcome.updated_at = now
+
+            lead = session.get(ShopLead, task.shop_lead_id)
+            if lead is not None:
+                lead.do_not_contact = keep_do_not_contact
+                lead.contact_status = "replied" if replied else "no_reply"
+                lead.updated_at = now
+
+            payload = json.loads(snapshot.payload_json)
+            state = payload["state"]
+            new_stage = "replied" if replied else "read_no_reply"
+            state["task_status"] = new_stage
+            state["reply"] = {
+                "replied": replied,
+                "stage": stage,
+                "ask_tags": ask_tags if replied else [],
+                "reply_text": outcome.reply_text if replied else None,
+                "replied_at": outcome.replied_at.isoformat() if outcome.replied_at else None,
+                "reply_timing": outcome.reply_timing if replied else None,
+                "sent_at": _aware(sent_at).isoformat(),
+            }
+            if note:
+                state["result_note"] = note
+            state["trace"] = [*state.get("trace", []), "reply_recorded" if replied else "no_reply_recorded"]
+            payload.update({"stage": new_stage, "interrupt": None, "state": state})
+            snapshot.stage = new_stage
+            snapshot.task_status = new_stage
+            snapshot.payload_json = json.dumps(payload, ensure_ascii=False)
+            snapshot.updated_at = now
+            task.status = new_stage
+            task.updated_at = now
+            event = "no_reply_timeout" if system else "reply_recorded" if replied else "no_reply_recorded"
+            session.add(RunEvent(run_id=run_id, event_type=event, payload_json=json.dumps(payload, ensure_ascii=False), created_at=now))
+            session.add(
+                AuditLog(
+                    actor="system" if system else "local_user",
+                    action=event,
+                    entity_type="outreach_outcome",
+                    entity_id=outcome.id,
+                    after_json=json.dumps(state["reply"], ensure_ascii=False),
+                    trace_id=run_id,
+                )
+            )
+            session.commit()
+            return payload
+
+    def unanswered_runs(self, days: float, now: datetime | None = None) -> list[str]:
+        """Runs sent more than `days` ago with no reply recorded."""
+        cutoff = (now or utc_now()) - timedelta(days=days)
+        with Session(self.engine) as session:
+            rows = session.exec(select(RunSnapshot).where(RunSnapshot.stage == "sent")).all()
+            stale: list[str] = []
+            for row in rows:
+                contact = session.exec(
+                    select(ContactSnapshot).where(ContactSnapshot.run_id == row.id)
+                ).first()
+                sent_at = _aware(contact.sent_at if contact else row.updated_at)
+                if sent_at < cutoff:
+                    stale.append(row.id)
+            return stale
+
+    def list_reply_records(self) -> list[dict[str, Any]]:
+        """Contact-time snapshot joined with what happened afterwards, for analysis."""
+        with Session(self.engine) as session:
+            records = []
+            for contact in session.exec(select(ContactSnapshot).order_by(ContactSnapshot.sent_at.desc())):
+                task = session.exec(
+                    select(OutreachTask).where(OutreachTask.workflow_run_id == contact.run_id)
+                ).first()
+                outcome = (
+                    session.exec(
+                        select(OutreachOutcome).where(OutreachOutcome.outreach_task_id == task.id)
+                    ).first()
+                    if task
+                    else None
+                )
+                records.append(
+                    {
+                        "run_id": contact.run_id,
+                        "sent_at": _aware(contact.sent_at).isoformat(),
+                        "channel": contact.channel,
+                        "tier": contact.tier,
+                        "shop_type": contact.shop_type,
+                        "features": json.loads(contact.features_json),
+                        "versions": json.loads(contact.versions_json),
+                        "final_text": contact.final_text,
+                        "outcome": {
+                            "stage": outcome.stage,
+                            "reply_status": outcome.reply_status,
+                            "reply_timing": outcome.reply_timing,
+                            "ask_tags": json.loads(outcome.ask_tags_json),
+                        }
+                        if outcome
+                        else None,
+                    }
+                )
+            return records
 
     def save_batch(self, batch_id: str, status: str, payload: dict[str, Any]) -> None:
         now = utc_now()

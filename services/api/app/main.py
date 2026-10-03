@@ -42,7 +42,20 @@ from packages.agent_core.screening import (  # noqa: E402
     to_lead_context,
     today_in_shanghai,
 )
-from packages.agent_core.vision import shop_extractor_from_env  # noqa: E402
+from packages.agent_core.outcomes import (  # noqa: E402
+    ASK_TAG_GROUPS,
+    ASK_TAGS,
+    NORMAL_REPLY_DAYS,
+    OUTCOME_RULES_VERSION,
+    REPLY_WINDOW_DAYS,
+    STAGES,
+    keeps_do_not_contact,
+    reply_timing,
+    scrub_contact_info,
+    wants_product_info,
+)
+from packages.agent_core.providers import ProviderResponseError  # noqa: E402
+from packages.agent_core.vision import read_reply, shop_extractor_from_env  # noqa: E402
 from services.worker.screening import UPLOAD_ROOT, make_read_shop, purge_old_uploads  # noqa: E402
 from services.worker.screening_graph import build_batch_graph, rank_results  # noqa: E402
 
@@ -87,8 +100,9 @@ graph = build_graph(
     suggester=build_suggester(store, llm_provider, load_product_facts()),
 )
 graph_lock = Lock()
+shop_extractor = shop_extractor_from_env()
 batch_graph = build_batch_graph(
-    make_read_shop(store, shop_extractor_from_env()),
+    make_read_shop(store, shop_extractor),
     lambda name: store.is_do_not_contact(name),
     today_in_shanghai,
     checkpointer=checkpointer,
@@ -110,6 +124,8 @@ class RunCreate(BaseModel):
     shop_note: str | None = Field(default=None, max_length=20000)
     activity_note: str | None = Field(default=None, max_length=20000)
     purchase_signal_note: str | None = Field(default=None, max_length=20000)
+    # Set by batch screening so the contact snapshot knows the tier and signals.
+    screening_snapshot: dict[str, Any] | None = None
 
 
 class RouteDecision(BaseModel):
@@ -235,9 +251,20 @@ def health() -> dict[str, str]:
     }
 
 
+def close_unanswered() -> None:
+    """User rule: 15 days without a reply ends the task as no-reply."""
+    for run_id in store.unanswered_runs(REPLY_WINDOW_DAYS):
+        store.record_reply(
+            run_id, replied=False, stage="no_reply", ask_tags=[], reply_text=None, replied_at=None,
+            note=f"发送后 {REPLY_WINDOW_DAYS} 天未回复，系统自动结束", keep_do_not_contact=True,
+            timing_fn=reply_timing, system=True,
+        )
+
+
 @app.get("/api/runs")
 def list_runs() -> list[dict[str, Any]]:
     store.expire_stale_reviews(REVIEW_TIMEOUT_HOURS)
+    close_unanswered()
     return store.list()
 
 
@@ -298,6 +325,7 @@ def start_run(payload: RunCreate) -> dict[str, Any]:
         "shop_note": payload.shop_note or "",
         "activity_note": payload.activity_note or "",
         "purchase_signal_note": payload.purchase_signal_note or "",
+        "screening_snapshot": payload.screening_snapshot or {},
         "trace": [],
         "route_review_status": "not_started",
         "content_review_status": "not_started",
@@ -497,6 +525,8 @@ def record_result(
     state["task_status"] = payload.result
     state["result_note"] = payload.note or ""
     state["trace"] = [*state.get("trace", []), f"record_result_{payload.result}"]
+    if payload.result == "sent":
+        store.save_contact_snapshot(run_id, state)
     return save_result(
         run_id,
         state,
@@ -628,7 +658,14 @@ def draft_selected_shops(batch_id: str, selected: list[tuple[dict[str, Any], str
             basis += "。建议切入点：" + "；".join(screening.content_angles)
         record = {"shop_key": item["shop_key"], "shop_name": extraction.shop_name, "route": route}
         try:
-            run = start_run(RunCreate(**context, contact_basis="cold_outreach", contact_basis_note=basis))
+            run = start_run(
+                RunCreate(
+                    **context,
+                    contact_basis="cold_outreach",
+                    contact_basis_note=basis,
+                    screening_snapshot={**screening.model_dump(), "account_kind": extraction.account_kind},
+                )
+            )
             with graph_lock:
                 state = graph.invoke(Command(resume={"requested_channel": route}), config_for(run["id"]))
             save_result(run["id"], state, "route_decided", before_state=run["state"])
@@ -696,3 +733,112 @@ def review_batch(batch_id: str, payload: BatchReview) -> dict[str, Any]:
     if selected:
         Thread(target=draft_selected_shops, args=(batch_id, selected), daemon=True).start()
     return result
+
+
+# --- Phase 3 step 1: what happened after sending ------------------------------
+
+
+class ReplyRecord(BaseModel):
+    replied: bool
+    stage: str
+    ask_tags: list[str] = Field(default_factory=list, max_length=15)
+    reply_text: str | None = Field(default=None, max_length=4000)
+    replied_at: datetime | None = None
+    note: str | None = Field(default=None, max_length=1000)
+
+    @model_validator(mode="after")
+    def check(self) -> "ReplyRecord":
+        if self.stage not in STAGES:
+            raise ValueError("未知的阶段")
+        unknown = [tag for tag in self.ask_tags if tag not in ASK_TAGS]
+        if unknown:
+            raise ValueError(f"未知的标签: {', '.join(unknown)}")
+        if self.replied and self.stage == "no_reply":
+            raise ValueError("对方已回复时，阶段不能是未回复")
+        if not self.replied and self.stage != "no_reply":
+            raise ValueError("对方没有回复时，阶段只能是未回复")
+        return self
+
+
+@app.get("/api/outcome-options")
+def outcome_options() -> dict[str, Any]:
+    return {
+        "rules_version": OUTCOME_RULES_VERSION,
+        "normal_reply_days": NORMAL_REPLY_DAYS,
+        "reply_window_days": REPLY_WINDOW_DAYS,
+        "stages": STAGES,
+        "ask_tag_groups": ASK_TAG_GROUPS,
+    }
+
+
+@app.post("/api/runs/{run_id}/reply")
+def record_reply(run_id: str, payload: ReplyRecord) -> dict[str, Any]:
+    replied_at = payload.replied_at
+    if replied_at is not None and replied_at.tzinfo is None:
+        replied_at = replied_at.astimezone()
+    try:
+        result = store.record_reply(
+            run_id,
+            replied=payload.replied,
+            stage=payload.stage,
+            ask_tags=payload.ask_tags,
+            reply_text=scrub_contact_info(payload.reply_text) if payload.reply_text else None,
+            replied_at=replied_at,
+            note=payload.note,
+            keep_do_not_contact=keeps_do_not_contact(payload.replied, payload.stage, payload.ask_tags),
+            timing_fn=reply_timing,
+        )
+    except BusinessRuleError as exc:
+        status = 404 if exc.code == "run_not_found" else 409
+        raise HTTPException(status_code=status, detail=f"{exc.code}: {exc.message}") from exc
+    result["state"]["reply"]["wants_product_info"] = wants_product_info(payload.ask_tags)
+    return result
+
+
+@app.post("/api/runs/{run_id}/reply/read")
+async def read_reply_screenshots(run_id: str, request: Request) -> dict[str, Any]:
+    """Read DM screenshots in memory. They are never written to disk."""
+    if not store.get(run_id):
+        raise HTTPException(status_code=404, detail="Run not found")
+    form = await request.form()
+    files = [item for item in form.getlist("images") if isinstance(item, UploadFile)]
+    if not 1 <= len(files) <= MAX_IMAGES_PER_SHOP:
+        raise HTTPException(status_code=409, detail=f"请上传 1 到 {MAX_IMAGES_PER_SHOP} 张私信截图")
+    images = []
+    for upload in files:
+        if (upload.content_type or "") not in ALLOWED_IMAGE_TYPES:
+            raise HTTPException(status_code=409, detail=f"invalid_image: {upload.filename} 不是 JPG、PNG 或 WebP 图片")
+        data = await upload.read()
+        if len(data) > MAX_IMAGE_BYTES:
+            raise HTTPException(status_code=409, detail=f"image_too_large: {upload.filename} 超过 10MB")
+        images.append((upload.filename or "reply.jpg", data))
+    common = {"workflow_run_id": run_id, "source": "reply", "case_id": run_id, "input_json": json.dumps({"images": len(images)})}
+    try:
+        result = read_reply(shop_extractor, images)
+    except ProviderResponseError as exc:
+        store.record_model_invocation(
+            **common, status="failed", provider=shop_extractor.provider_name, model=shop_extractor.model_name,
+            prompt_version="reply-extraction-v1", error_type=type(exc.__cause__).__name__ if exc.__cause__ else "ProviderResponseError",
+            error_message=str(exc),
+        )
+        raise HTTPException(status_code=502, detail="截图没有读出来，请重试，或直接手动填写对方的回复") from exc
+    extraction = result.extraction
+    store.record_model_invocation(
+        **common, status="succeeded", provider=result.provider, model=result.model, prompt_version=result.prompt_version,
+        output_json=extraction.model_dump_json(), usage_json=json.dumps(result.usage, ensure_ascii=False), latency_ms=result.latency_ms,
+    )
+    if extraction.page_kind != "dm_conversation":
+        raise HTTPException(status_code=409, detail=f"图片已读取，但不是私信对话：{extraction.page_summary or '未识别出内容类型'}")
+    return {
+        "replied": extraction.replied,
+        "auto_reply_only": extraction.auto_reply_only,
+        "reply_text": "\n".join(extraction.counterpart_messages),
+        "suggested_tags": extraction.suggested_tags,
+        "contact_info_shared": extraction.contact_info_shared,
+        "reply_time_text": extraction.reply_time_text,
+    }
+
+
+@app.get("/api/reply-records")
+def reply_records() -> list[dict[str, Any]]:
+    return store.list_reply_records()

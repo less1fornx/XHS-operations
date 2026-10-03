@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from services.api.app.storage import RunStore
+from packages.agent_core.outcomes import REPLY_WINDOW_DAYS, reply_timing
 from services.worker.screening import purge_old_uploads
 
 
@@ -22,6 +23,13 @@ def run_once(store: RunStore) -> list[dict[str, object]]:
         print(json.dumps({"event": "run_expired", "run_id": run_id}, ensure_ascii=False), flush=True)
     for batch_id in purge_old_uploads():
         print(json.dumps({"event": "screenshots_purged", "batch_id": batch_id}, ensure_ascii=False), flush=True)
+    for run_id in store.unanswered_runs(REPLY_WINDOW_DAYS):
+        store.record_reply(
+            run_id, replied=False, stage="no_reply", ask_tags=[], reply_text=None, replied_at=None,
+            note=f"发送后 {REPLY_WINDOW_DAYS} 天未回复，系统自动结束", keep_do_not_contact=True,
+            timing_fn=reply_timing, system=True,
+        )
+        print(json.dumps({"event": "no_reply_timeout", "run_id": run_id}, ensure_ascii=False), flush=True)
     reminders = store.claim_due_reminders()
     for reminder in reminders:
         print(

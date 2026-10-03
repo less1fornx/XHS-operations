@@ -21,6 +21,7 @@ import {
 import './App.css'
 import { api, keyPart } from './api'
 import ScreeningView from './Screening'
+import ReplyPanel, { type ReplyState } from './Reply'
 
 type Channel = 'dm' | 'comment' | 'none'
 type ContactBasis = 'cold_outreach' | 'prior_conversation' | 'inbound_inquiry' | 'explicit_permission'
@@ -53,6 +54,7 @@ type Run = {
     model_quality_flags?: string[]
     model_meta?: { provider?: string; model?: string; prompt_version?: string; latency_ms?: number }
     evidence?: string[]
+    reply?: ReplyState
   }
 }
 
@@ -73,26 +75,27 @@ type RiskEvent = {
   created_at: string
 }
 
-type ListFilter = 'todo' | 'sending' | 'done' | 'all'
+type ListFilter = 'todo' | 'sending' | 'waiting' | 'done' | 'all'
 
 const channelLabel: Record<string, string> = { dm: '私信', comment: '评论', none: '暂不触达' }
 const stageLabel: Record<string, string> = {
   route_review: '待选路线', content_review: '待审文案', scheduled: '待发送', opened: '发送中', sent: '已发送',
-  failed: '发送异常', read_no_reply: '已读无回复', blocked: '已结束',
+  failed: '发送异常', read_no_reply: '未回复', blocked: '已结束', replied: '已回复',
 }
 const stageBadge: Record<string, string> = {
   route_review: 'warning', content_review: 'warning', scheduled: 'info', opened: 'info', sent: 'success',
-  failed: 'danger', read_no_reply: 'neutral', blocked: 'neutral',
+  failed: 'danger', read_no_reply: 'neutral', blocked: 'neutral', replied: 'success',
 }
 const filterStages: Record<ListFilter, string[] | null> = {
   todo: ['route_review', 'content_review'],
   sending: ['scheduled', 'opened'],
-  done: ['sent', 'failed', 'read_no_reply', 'blocked'],
+  waiting: ['sent'],
+  done: ['replied', 'failed', 'read_no_reply', 'blocked'],
   all: null,
 }
-const filterLabel: Record<ListFilter, string> = { todo: '待我处理', sending: '待发送', done: '已结束', all: '全部' }
+const filterLabel: Record<ListFilter, string> = { todo: '待处理', sending: '待发送', waiting: '等回复', done: '有结果', all: '全部' }
 const steps = ['选路线', '审文案', '去发送', '记结果']
-const stepIndex: Record<string, number> = { route_review: 0, content_review: 1, scheduled: 2, opened: 2, sent: 3, failed: 3, read_no_reply: 4, blocked: 4 }
+const stepIndex: Record<string, number> = { route_review: 0, content_review: 1, scheduled: 2, opened: 2, sent: 3, failed: 3, replied: 4, read_no_reply: 4, blocked: 4 }
 
 function localNow(): string {
   const now = new Date()
@@ -152,8 +155,8 @@ function App() {
 
   const selected = useMemo(() => runs.find((run) => run.id === selectedId) || null, [runs, selectedId])
   const counts = useMemo(() => {
-    const result = { todo: 0, sending: 0, done: 0, all: runs.length } as Record<ListFilter, number>
-    for (const run of runs) for (const key of ['todo', 'sending', 'done'] as ListFilter[]) if (filterStages[key]!.includes(run.stage)) result[key] += 1
+    const result = { todo: 0, sending: 0, waiting: 0, done: 0, all: runs.length } as Record<ListFilter, number>
+    for (const run of runs) for (const key of ['todo', 'sending', 'waiting', 'done'] as ListFilter[]) if (filterStages[key]!.includes(run.stage)) result[key] += 1
     return result
   }, [runs])
   const visibleRuns = useMemo(() => {
@@ -312,7 +315,7 @@ function App() {
     else tab?.close()
   }
 
-  const recordResult = (result: 'sent' | 'failed' | 'read_no_reply', fallbackNote = '') => {
+  const recordResult = (result: 'sent' | 'failed', fallbackNote = '') => {
     if (!selected) return
     const note = resultNote.trim() || fallbackNote
     void runAction(() => api<Run>(`/api/runs/${selected.id}/result`, {
@@ -388,7 +391,7 @@ function App() {
         {view === 'workflow' && <div className="master-detail">
           <section className="panel list-panel">
             <div className="list-head">
-              <div className="tabs">{(['todo', 'sending', 'done', 'all'] as ListFilter[]).map((key) => <button type="button" key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}>{filterLabel[key]}<em>{counts[key]}</em></button>)}</div>
+              <div className="tabs">{(['todo', 'sending', 'waiting', 'done', 'all'] as ListFilter[]).map((key) => <button type="button" key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}>{filterLabel[key]}<em>{counts[key]}</em></button>)}</div>
               <button className="secondary-button small" type="button" onClick={() => { setShowForm(true); setNotice('') }}><Plus size={13} />手动添加</button>
             </div>
             <div className="run-list">
@@ -476,21 +479,18 @@ function App() {
                 <label>备注（可选）<input value={resultNote} onChange={(event) => setResultNote(event.target.value)} placeholder="例如：提示对方未关注，只能发一条" /></label>
                 <div className="button-row spread">
                   <button className="secondary-button" type="button" disabled={busy} onClick={() => recordResult('failed', '人工反馈：没有发送成功')}><AlertTriangle size={14} />没发成功</button>
-                  <button className="primary-button" type="button" disabled={busy || frozen} onClick={() => recordResult('sent')}><Check size={15} />已发送成功</button>
+                  <button className="primary-button" type="button" disabled={busy || frozen} onClick={() => { recordResult('sent'); setFilter('waiting') }}><Check size={15} />已发送成功</button>
                 </div>
               </div>}
 
-              {selected.stage === 'sent' && <div className="decision-content">
-                <div className="status-card ok"><Check size={18} /><div><strong>已记录发送</strong><p>对方已读但一直没回复时，在这里标记，这家店之后不会再被联系。</p></div></div>
+              {['sent', 'replied', 'read_no_reply'].includes(selected.stage) && <div className="decision-content">
+                {selected.stage === 'sent' && <div className="status-card ok"><Check size={18} /><div><strong>已发送，等对方回复</strong><p>对方回复后回到这里记录。记录的内容会用来分析什么样的店、什么样的文案更容易得到回复。</p></div></div>}
+                {selected.stage === 'read_no_reply' && <div className="status-card neutral"><ShieldCheck size={18} /><div><strong>未回复，已加入勿扰名单</strong><p>{selected.state.result_note} 如果对方之后又回复了，仍然可以在下面记录，这家店会移出勿扰名单。</p></div></div>}
                 {finalText}
-                <label>观察备注 <b className="req">*</b><input value={resultNote} onChange={(event) => setResultNote(event.target.value)} placeholder="例如：已读超过 3 天，未回复" /></label>
-                <div className="button-row spread">
-                  <button className="secondary-button" type="button" disabled={busy} onClick={() => recordResult('failed', '人工反馈：发送后出现异常')}><AlertTriangle size={14} />记录异常</button>
-                  <button className="primary-button" type="button" disabled={busy || !resultNote.trim()} onClick={() => recordResult('read_no_reply')}><ShieldCheck size={14} />标记已读无回复</button>
-                </div>
+                <ReplyPanel run={selected} busy={busy} onSave={(action) => { void runAction(action).then((next) => { if (next) setFilter(next.stage === 'sent' ? 'waiting' : 'done') }) }} onError={setError} />
+                {selected.stage === 'sent' && <button className="link-button danger" type="button" disabled={busy} onClick={() => recordResult('failed', '人工反馈：发送后出现异常')}>发送后出现异常（例如被平台限制），点这里记录</button>}
               </div>}
 
-              {selected.stage === 'read_no_reply' && <div className="decision-content"><div className="status-card neutral"><ShieldCheck size={18} /><div><strong>已加入勿扰名单</strong><p>这家店不会再进入评选。{selected.state.result_note}</p></div></div>{finalText}</div>}
               {(selected.stage === 'failed' || selected.stage === 'blocked') && <div className="decision-content"><div className="status-card neutral"><AlertTriangle size={18} /><div><strong>{selected.stage === 'failed' ? '已记录发送异常' : '任务已结束，不会联系这家店铺'}</strong><p>{selected.state.result_note || '被策略检查拦截，详情见“风险记录”。'}</p></div></div>{finalText}</div>}
 
               {!['route_review', 'content_review'].includes(selected.stage) && modelDetail && <details className="more-detail"><summary>查看模型依据</summary>{modelDetail}</details>}

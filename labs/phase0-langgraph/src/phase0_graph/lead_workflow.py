@@ -50,6 +50,8 @@ class LeadState(TypedDict, total=False):
     model_uncertainties: list[str]
     model_quality_flags: list[str]
     model_meta: dict[str, Any]
+    # Phase 2C: how the shop was tiered when it was picked, kept for the contact snapshot.
+    screening_snapshot: dict[str, Any]
 
 
 Suggester = Callable[..., dict]

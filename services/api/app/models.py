@@ -158,8 +158,32 @@ class OutreachOutcome(SQLModel, table=True):
     human_notes: str | None = None
     source: str = "human_api"
     confirmed_by: str = "local_user"
+    # Phase 3 step 1: first reply facts, what the shop asked for, and the stage.
+    replied_at: datetime | None = None
+    reply_timing: str | None = None
+    reply_text: str | None = None
+    ask_tags_json: str = "[]"
+    stage: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+class ContactSnapshot(SQLModel, table=True):
+    """What we knew and what we sent at the moment of contact. Never updated afterwards."""
+
+    __tablename__ = "contact_snapshots"
+
+    id: str = Field(default_factory=new_id, primary_key=True)
+    run_id: str = Field(index=True, unique=True)
+    shop_lead_id: str | None = Field(default=None, index=True)
+    sent_at: datetime
+    channel: str
+    final_text: str
+    tier: str | None = None
+    shop_type: str | None = None
+    features_json: str = "{}"
+    versions_json: str = "{}"
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class QuotaUsage(SQLModel, table=True):

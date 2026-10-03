@@ -143,3 +143,17 @@ label { font-size:12px; }input,textarea,select { font-size:14px; }
 .list-head { flex-direction:column; align-items:stretch; }
 .tabs button { flex:1; justify-content:center; white-space:nowrap; }
 .list-head .secondary-button { border:1px dashed var(--line); background:transparent; white-space:nowrap; }
+
+/* Reply recording */
+.reply-panel { display:grid; gap:13px; padding:16px; border:1px solid var(--line); border-radius:8px; }
+.reply-head { display:flex; align-items:center; justify-content:space-between; gap:10px; }.reply-head strong { font-size:15px; }
+.reply-panel .muted { line-height:1.6; }
+.reply-read { display:grid; gap:8px; }
+.field-title { font-size:12px; font-weight:700; color:var(--muted); }
+.tag-groups { display:grid; gap:9px; }
+.tag-group { display:grid; grid-template-columns:86px 1fr; gap:8px; align-items:start; }
+.tag-group small { font-size:11px; color:var(--muted); padding-top:6px; }
+.tag-group > div { display:flex; flex-wrap:wrap; gap:6px; }
+.tag { border:1px solid var(--line); background:#fff; border-radius:14px; padding:5px 11px; font-size:12px; color:var(--ink); }
+.tag.active { border-color:var(--teal); background:var(--teal-soft); color:var(--teal); font-weight:700; }
+.tabs button { padding:6px 4px; font-size:11.5px; }

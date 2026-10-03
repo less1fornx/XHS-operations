@@ -7,13 +7,15 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 import httpx
 from dotenv import load_dotenv
-from pydantic import ValidationError
+from pydantic import Field, ValidationError, field_validator, model_validator
 
 from .providers import PROJECT_ROOT, ProviderConfigError, ProviderResponseError
+from .contracts import StrictModel
+from .outcomes import ASK_TAGS, scrub_contact_info
 from .screening import ShopExtraction
 
 
@@ -165,4 +167,108 @@ def shop_extractor_from_env(name: str | None = None) -> ShopExtractor:
         model=os.getenv("QWEN_VISION_MODEL") or os.getenv("QWEN_MODEL", "qwen3.7-plus-2026-05-26"),
         base_url=os.getenv("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
         timeout_seconds=float(os.getenv("QWEN_VISION_TIMEOUT_SECONDS", "90")),
+    )
+
+
+# --- Reply screenshots (what the shop said back) ------------------------------
+
+REPLY_EXTRACTION_PROMPT_VERSION = "reply-extraction-v1"
+REPLY_EXTRACTION_PROMPT_PATH = PROJECT_ROOT / "prompts" / "reply_extraction" / "v1" / "system.md"
+
+
+class ReplyExtraction(StrictModel):
+    page_kind: Literal["dm_conversation", "other"]
+    page_summary: str = Field(default="", max_length=300)
+    counterpart_messages: list[str] = Field(max_length=30)
+    replied: bool
+    auto_reply_only: bool = False
+    contact_info_shared: bool = False
+    suggested_tags: list[str] = Field(max_length=15)
+    reply_time_text: str | None = Field(default=None, max_length=50)
+
+    @field_validator("suggested_tags")
+    @classmethod
+    def known_tags_only(cls, value: list[str]) -> list[str]:
+        return [tag for tag in value if tag in ASK_TAGS]
+
+    @field_validator("counterpart_messages")
+    @classmethod
+    def no_contact_details(cls, value: list[str]) -> list[str]:
+        return [scrub_contact_info(text) for text in value]
+
+    @model_validator(mode="after")
+    def auto_reply_is_not_a_reply(self) -> "ReplyExtraction":
+        # An enterprise account's menu is not the shop answering.
+        if self.auto_reply_only:
+            self.replied = False
+            self.counterpart_messages = []
+            self.suggested_tags = []
+        return self
+
+
+@dataclass(frozen=True)
+class ReplyResult:
+    extraction: ReplyExtraction
+    provider: str
+    model: str
+    prompt_version: str
+    usage: dict[str, Any]
+    latency_ms: int
+
+
+def _image_parts(images: list[Image]) -> list[dict[str, Any]]:
+    parts: list[dict[str, Any]] = []
+    for name, data in images:
+        mime = mimetypes.guess_type(name)[0] or "image/jpeg"
+        parts.append(
+            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{base64.b64encode(data).decode()}"}}
+        )
+    return parts
+
+
+def read_reply(extractor: ShopExtractor, images: list[Image]) -> ReplyResult:
+    """Read a DM screenshot with the same model configuration used for shop pages."""
+    if isinstance(extractor, MockShopExtractor):
+        name = images[0][0]
+        if "fail" in name:
+            raise ProviderResponseError("截图识别失败: 模拟的识别错误")
+        extraction = ReplyExtraction(
+            page_kind="dm_conversation",
+            counterpart_messages=["发点资料看看"],
+            replied=True,
+            suggested_tags=["catalog"],
+            reply_time_text=None,
+        )
+        return ReplyResult(extraction, "mock", extractor.model_name, REPLY_EXTRACTION_PROMPT_VERSION, {}, 0)
+    assert isinstance(extractor, QwenShopExtractor)
+    payload = {
+        "model": extractor.model_name,
+        "messages": [
+            {"role": "system", "content": REPLY_EXTRACTION_PROMPT_PATH.read_text(encoding="utf-8")},
+            {"role": "user", "content": [*_image_parts(images), {"type": "text", "text": "请记录这些私信截图。"}]},
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "reply_extraction", "strict": True, "schema": ReplyExtraction.model_json_schema()},
+        },
+        "enable_thinking": False,
+        "temperature": 0,
+    }
+    started = time.perf_counter()
+    try:
+        response = extractor._client.post(
+            f"{extractor.base_url}/chat/completions", headers=extractor._headers, json=payload
+        )
+        response.raise_for_status()
+        body = response.json()
+        extraction = ReplyExtraction.model_validate_json(body["choices"][0]["message"]["content"])
+    except (httpx.HTTPError, KeyError, TypeError, ValueError, ValidationError) as exc:
+        raise ProviderResponseError(f"截图识别失败: {exc}") from exc
+    return ReplyResult(
+        extraction,
+        extractor.provider_name,
+        str(body.get("model") or extractor.model_name),
+        REPLY_EXTRACTION_PROMPT_VERSION,
+        body.get("usage") or {},
+        round((time.perf_counter() - started) * 1000),
     )
