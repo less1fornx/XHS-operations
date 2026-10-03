@@ -45,7 +45,10 @@ class ShopExtraction(StrictModel):
     fabric_mentions: list[str] = Field(max_length=20)
     high_end_mentions: list[str] = Field(max_length=20)
     store_mentions: list[str] = Field(max_length=10)
+    # Dates on note cards WITHOUT the 置顶 badge. Pinned notes can be years old and
+    # sit above newer ones, so they say nothing about activity (user rule 2026-10-03).
     recent_post_dates: list[str] = Field(max_length=20)
+    pinned_post_dates: list[str] = Field(default_factory=list, max_length=10)
     content_topics: list[str] = Field(max_length=20)
     knitwear_present: SignalValue
     unclear_fields: list[str] = Field(max_length=20)

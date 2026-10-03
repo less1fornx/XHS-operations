@@ -17,6 +17,7 @@ type Extraction = {
   bio_text: string
   followers_text?: string | null
   unclear_fields: string[]
+  pinned_post_dates?: string[]
 }
 
 type Screening = {
@@ -228,6 +229,7 @@ export default function ScreeningView({ onOpenWorkflow }: { onOpenWorkflow: () =
                   {signal.evidence.length > 0 && <small>{signal.evidence.slice(0, 2).join('；')}</small>}
                 </div>)}
               </div>}
+              {s.signals.A_active?.value === 'unknown' && (e.pinned_post_dates?.length ?? 0) > 0 && <p className="unclear">截图里只看到置顶笔记，置顶不代表最近更新，活跃情况记为未知。可以补一张置顶下方的笔记列表截图</p>}
               {e.unclear_fields.length > 0 && <p className="unclear">看不清或截图里没有：{e.unclear_fields.join('、')}，请核对</p>}
               {s.content_angles.length > 0 && <ul className="angles">{s.content_angles.map((angle) => <li key={angle}>{angle}</li>)}</ul>}
               {s.tier !== 'excluded' && d && <footer>

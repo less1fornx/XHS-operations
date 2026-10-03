@@ -212,3 +212,15 @@ def test_non_shop_images_are_reported_as_not_a_shop_page(tmp_path) -> None:
     assert "私信对话" in result["error"]
     with Session(store.engine) as session:
         assert session.exec(select(ModelInvocation)).one().status == "succeeded"
+
+
+def test_pinned_notes_do_not_count_towards_activity() -> None:
+    only_pinned = screen_shop(shop(pinned_post_dates=["2024-05-05", "2023-12-13"]), TODAY)
+    assert only_pinned.signals["A_active"].value == "unknown"
+    assert only_pinned.latest_post_age_days is None
+
+    with_recent = screen_shop(
+        shop(pinned_post_dates=["2024-05-05"], recent_post_dates=["3天前"]), TODAY
+    )
+    assert with_recent.signals["A_active"].value == "yes"
+    assert with_recent.latest_post_age_days == 3
