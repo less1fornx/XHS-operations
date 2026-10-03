@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from services.api.app.storage import RunStore
+from services.worker.screening import purge_old_uploads
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -19,6 +20,8 @@ REVIEW_TIMEOUT_HOURS = float(os.getenv("AGENT_REVIEW_TIMEOUT_HOURS", "48"))
 def run_once(store: RunStore) -> list[dict[str, object]]:
     for run_id in store.expire_stale_reviews(REVIEW_TIMEOUT_HOURS):
         print(json.dumps({"event": "run_expired", "run_id": run_id}, ensure_ascii=False), flush=True)
+    for batch_id in purge_old_uploads():
+        print(json.dumps({"event": "screenshots_purged", "batch_id": batch_id}, ensure_ascii=False), flush=True)
     reminders = store.claim_due_reminders()
     for reminder in reminders:
         print(

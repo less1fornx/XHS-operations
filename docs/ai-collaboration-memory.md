@@ -189,8 +189,9 @@ React/Vite Web
 - Phase 0：完成。
 - Phase 1A 至 1D：完成。
 - Phase 2A：完成基础骨架，包括结构化输入输出、版本化 Prompt、Qwen/Mock Provider、证据引用校验和固定案例评测。
+- Phase 2C：截图批量初筛已跑通（读图 → 规则分档 → 批量审核 → 自动起草），规则 v0。
 - Phase 2B：主链路已端到端跑通（录入 → 模型建议 → 人工路线审核 → 文案审核 → 加入提醒队列），模型调用已持久化。尚未完成结果反馈窗口、周期分析和真实样本评测集。
-- 当前自动测试：24 项通过。
+- 当前自动测试：36 项通过。
 - 当前 Mock 评测：正式集 6/6 通过，其中 3 个由 Policy Gate 直接拒绝、未调用 Provider。该结果只证明流程和测试规则可运行，不代表 Qwen 的真实准确率。
 - Qwen 已于 2026-10-02 完成首次真实评测：正式集 6/6 通过，但其中只有 3 个是真实模型调用，样本过少，不能视为准确率。
 
@@ -546,6 +547,22 @@ Phase 2B 将 QwenProvider 接入 FastAPI/Worker 时，需要选择：
 **用户最终决定**：（待填写）
 
 ## 8. 最近交接记录
+
+### 2026-10-03｜Claude｜Phase 2C 截图批量初筛：读图、规则分档、批量审核、自动起草
+
+- 目的：按用户确认的设计（`docs/phase2c-screenshot-intake-design.md`），让用户只上传截图，系统读图、分档、排序，用户整批审核一次后自动进入起草。
+- 修改文件：
+  - 新增 `packages/agent_core/screening.py`（读图结果契约、规则 v0、排序、按配额分配路线、转成起草上下文）、`packages/agent_core/vision.py`（Qwen 与 Mock 读图）、`prompts/shop_extraction/v1/system.md`。
+  - 新增 `services/worker/screening_graph.py`（LangGraph：`Send` 分发、列表合并、`interrupt` 批量审核）、`services/worker/screening.py`（单店读取、重试、落库、10 天清理）。
+  - `services/api/app/models.py`、`storage.py`、迁移 `c41d7a9e2f60`：新增 `screening_batches`。
+  - `services/api/app/main.py`：`POST/GET /api/batches`、`GET /api/batches/{id}`、原图读取、`POST /api/batches/{id}/review`；创建任务逻辑抽成 `start_run()` 供批量复用。
+  - `services/worker/worker.py`：轮询时清理过期截图。
+  - 前端：新增 `apps/web/src/api.ts`、`Screening.tsx`，导航新增“批量初筛”。
+  - 依赖：新增 `python-multipart`（文件上传）。
+- 验证：`pytest` 36 passed；迁移在副本上升级、降级、再升级，`alembic check` 无差异；用户 7 家真实店铺的主页和内容截图（未使用私信截图）在测试环境中经真实 Qwen 走完整流程：读图 10 秒（并行），2 高、1 中、3 低、1 排除（纱线供应商），3 家入选店草稿 43 秒生成；“不同意”标注已保存。实测中发现并修复了上传文件类型判断错误。
+- 真实数据库：已备份为 `data/agent_ops.backup-20261003-pre-screening.db` 并升级到 `c41d7a9e2f60`。
+- 未完成事项：用户需重启后台才能使用新页面；分档标注目前只存于批次记录，尚未汇总成一致率；读图结果的人工改正入口尚未做（目前只能标“不同意”并写理由）；录屏输入属于后续升级。
+- 已知现象：模型把一位做高定的店主判成“内容博主”；分档依据的是截图当下的主页，与历史私信时的状态不同。
 
 ### 2026-10-02 19:10｜Claude｜用无头浏览器实测前端，修复审核按钮全部失效的问题
 

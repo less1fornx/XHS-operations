@@ -229,6 +229,17 @@ class ModelInvocation(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class ScreeningBatch(SQLModel, table=True):
+    __tablename__ = "screening_batches"
+
+    id: str = Field(primary_key=True)
+    status: str
+    shop_count: int = 0
+    payload_json: str = "{}"
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class RunSnapshot(SQLModel, table=True):
     __tablename__ = "run_snapshots"
 

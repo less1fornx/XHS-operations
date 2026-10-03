@@ -6,12 +6,15 @@ import sqlite3
 import hashlib
 import json
 from datetime import datetime
-from threading import Lock
+from threading import Lock, Thread
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import FileResponse
+# request.form() yields Starlette's UploadFile; FastAPI's is a subclass of it.
+from starlette.datastructures import UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
@@ -30,6 +33,17 @@ if str(LAB_SOURCE) not in sys.path:
 from phase0_graph.lead_workflow import build_graph  # noqa: E402
 from packages.agent_core.providers import provider_from_env  # noqa: E402
 from services.worker.lead_generation import build_suggester, load_product_facts  # noqa: E402
+from packages.agent_core.screening import (  # noqa: E402
+    MAX_IMAGES_PER_SHOP,
+    MAX_SHOPS_PER_BATCH,
+    ShopExtraction,
+    ShopScreening,
+    to_lead_context,
+    today_in_shanghai,
+)
+from packages.agent_core.vision import shop_extractor_from_env  # noqa: E402
+from services.worker.screening import UPLOAD_ROOT, make_read_shop, purge_old_uploads  # noqa: E402
+from services.worker.screening_graph import build_batch_graph  # noqa: E402
 
 
 Channel = Literal["dm", "comment", "none"]
@@ -72,6 +86,15 @@ graph = build_graph(
     suggester=build_suggester(store, llm_provider, load_product_facts()),
 )
 graph_lock = Lock()
+batch_graph = build_batch_graph(
+    make_read_shop(store, shop_extractor_from_env()),
+    lambda name: store.is_do_not_contact(name),
+    today_in_shanghai,
+    checkpointer=checkpointer,
+)
+batch_lock = Lock()
+ALLOWED_IMAGE_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
 REVIEW_TIMEOUT_HOURS = float(os.getenv("AGENT_REVIEW_TIMEOUT_HOURS", "48"))
 
 
@@ -253,8 +276,7 @@ def validate_schedule(value: str) -> None:
         raise HTTPException(status_code=409, detail="invalid_schedule: 定时提醒时间格式无效") from exc
 
 
-@app.post("/api/runs")
-def create_run(payload: RunCreate) -> dict[str, Any]:
+def start_run(payload: RunCreate) -> dict[str, Any]:
     if store.is_do_not_contact(payload.shop_name, payload.profile_url):
         raise HTTPException(
             status_code=409,
@@ -283,6 +305,11 @@ def create_run(payload: RunCreate) -> dict[str, Any]:
     with graph_lock:
         state = graph.invoke(initial_state, config_for(run_id))
     return save_result(run_id, state, "run_created")
+
+
+@app.post("/api/runs")
+def create_run(payload: RunCreate) -> dict[str, Any]:
+    return start_run(payload)
 
 
 @app.get("/api/runs/{run_id}")
@@ -483,3 +510,158 @@ def list_run_events(run_id: str) -> list[dict[str, Any]]:
     if not store.get(run_id):
         raise HTTPException(status_code=404, detail="Run not found")
     return store.events(run_id)
+
+
+# --- Phase 2C: screenshot batches -------------------------------------------
+
+
+class BatchDecision(BaseModel):
+    shop_key: str = Field(min_length=1, max_length=50)
+    route: Channel = "none"
+    tier_feedback: Literal["agree", "disagree"] | None = None
+    note: str | None = Field(default=None, max_length=500)
+
+
+class BatchReview(BaseModel):
+    decisions: list[BatchDecision] = Field(max_length=MAX_SHOPS_PER_BATCH)
+
+
+def batch_config(batch_id: str) -> dict[str, dict[str, str]]:
+    return {"configurable": {"thread_id": f"batch-{batch_id}"}}
+
+
+def batch_payload(batch_id: str, state: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": batch_id,
+        "status": state.get("status", "processing"),
+        "created_at": state.get("created_at"),
+        "dm_slots": state.get("dm_slots"),
+        "comment_slots": state.get("comment_slots"),
+        "results": state.get("results", []),
+        "ranked": state.get("ranked", []),
+        "review": state.get("review"),
+        "drafts": state.get("drafts", []),
+    }
+
+
+@app.get("/api/batches")
+def list_batches() -> list[dict[str, Any]]:
+    purge_old_uploads()
+    return store.list_batches()
+
+
+@app.post("/api/batches")
+async def create_batch(request: Request) -> dict[str, Any]:
+    form = await request.form()
+    batch_id = str(uuid4())
+    folder = UPLOAD_ROOT / batch_id
+    shops: list[dict[str, Any]] = []
+    for index in range(MAX_SHOPS_PER_BATCH + 1):
+        files = [item for item in form.getlist(f"shop_{index}") if isinstance(item, UploadFile)]
+        if not files:
+            continue
+        if len(shops) >= MAX_SHOPS_PER_BATCH:
+            raise HTTPException(status_code=409, detail=f"too_many_shops: 每批最多 {MAX_SHOPS_PER_BATCH} 家店")
+        if len(files) > MAX_IMAGES_PER_SHOP:
+            raise HTTPException(status_code=409, detail=f"too_many_images: 每家店最多 {MAX_IMAGES_PER_SHOP} 张截图")
+        shop_key = f"shop_{index}"
+        paths: list[str] = []
+        for number, upload in enumerate(files):
+            suffix = ALLOWED_IMAGE_TYPES.get(upload.content_type or "")
+            if suffix is None:
+                raise HTTPException(status_code=409, detail=f"invalid_image: {upload.filename} 不是 JPG、PNG 或 WebP 图片")
+            data = await upload.read()
+            if len(data) > MAX_IMAGE_BYTES:
+                raise HTTPException(status_code=409, detail=f"image_too_large: {upload.filename} 超过 10MB")
+            folder.mkdir(parents=True, exist_ok=True)
+            path = folder / f"{shop_key}_{number}{suffix}"
+            path.write_bytes(data)
+            paths.append(str(path))
+        shops.append({"batch_id": batch_id, "shop_key": shop_key, "image_paths": paths})
+    if not shops:
+        raise HTTPException(status_code=409, detail="no_images: 请至少为一家店上传截图")
+
+    summary = store.account_summary()
+    initial = {
+        "batch_id": batch_id,
+        "shops": shops,
+        "dm_slots": max(summary["dm"]["limit"] - summary["dm"]["used"], 0),
+        "comment_slots": max(summary["comment"]["limit"] - summary["comment"]["used"], 0),
+        "results": [],
+        "status": "processing",
+    }
+    with batch_lock:
+        state = batch_graph.invoke(initial, batch_config(batch_id))
+    payload = batch_payload(batch_id, {**state, "created_at": datetime.now().isoformat()})
+    store.save_batch(batch_id, payload["status"], payload)
+    return payload
+
+
+@app.get("/api/batches/{batch_id}")
+def get_batch(batch_id: str) -> dict[str, Any]:
+    payload = store.get_batch(batch_id)
+    if not payload:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    return payload
+
+
+@app.get("/api/batches/{batch_id}/images/{file_name}")
+def get_batch_image(batch_id: str, file_name: str) -> FileResponse:
+    folder = (UPLOAD_ROOT / batch_id).resolve()
+    path = (folder / file_name).resolve()
+    if path.parent != folder or not path.is_file():
+        raise HTTPException(status_code=404, detail="原图不存在或已按 10 天保存期限删除")
+    return FileResponse(path)
+
+
+def draft_selected_shops(batch_id: str, selected: list[tuple[dict[str, Any], str]]) -> None:
+    """Hand each approved shop to the existing single-shop workflow, route preset."""
+    for item, route in selected:
+        extraction = ShopExtraction.model_validate(item["extraction"])
+        screening = ShopScreening.model_validate(item["screening"])
+        context = to_lead_context(extraction, screening)
+        basis = "批量初筛入选（{}）：{}".format(
+            screening.rules_version, "；".join(screening.tier_reasons)
+        )
+        if screening.content_angles:
+            basis += "。建议切入点：" + "；".join(screening.content_angles)
+        record = {"shop_key": item["shop_key"], "shop_name": extraction.shop_name, "route": route}
+        try:
+            run = start_run(RunCreate(**context, contact_basis="cold_outreach", contact_basis_note=basis))
+            with graph_lock:
+                state = graph.invoke(Command(resume={"requested_channel": route}), config_for(run["id"]))
+            save_result(run["id"], state, "route_decided", before_state=run["state"])
+            record.update(run_id=run["id"], status="drafted")
+        except Exception as exc:  # one shop failing must not stop the others
+            record.update(status="failed", error=str(exc))
+        payload = store.get_batch(batch_id) or {}
+        payload["drafts"] = [*payload.get("drafts", []), record]
+        if len(payload["drafts"]) == len(selected):
+            payload["status"] = "drafted"
+        store.save_batch(batch_id, payload.get("status", "drafting"), payload)
+
+
+@app.post("/api/batches/{batch_id}/review")
+def review_batch(batch_id: str, payload: BatchReview) -> dict[str, Any]:
+    current = store.get_batch(batch_id)
+    if not current:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    if current["status"] != "awaiting_review":
+        raise HTTPException(status_code=409, detail="当前批次不在待审核状态")
+    by_key = {item["shop_key"]: item for item in current["ranked"]}
+    unknown = [d.shop_key for d in payload.decisions if d.shop_key not in by_key]
+    if unknown:
+        raise HTTPException(status_code=409, detail=f"unknown_shop: {', '.join(unknown)}")
+    decision = payload.model_dump()
+    with batch_lock:
+        state = batch_graph.invoke(Command(resume=decision), batch_config(batch_id))
+    selected = [
+        (by_key[d.shop_key], d.route)
+        for d in payload.decisions
+        if d.route in ("dm", "comment") and by_key[d.shop_key]["screening"]["tier"] != "excluded"
+    ]
+    result = {**current, "review": state.get("review"), "status": "drafting" if selected else "reviewed", "drafts": []}
+    store.save_batch(batch_id, result["status"], result)
+    if selected:
+        Thread(target=draft_selected_shops, args=(batch_id, selected), daemon=True).start()
+    return result

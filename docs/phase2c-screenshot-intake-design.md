@@ -139,3 +139,19 @@ Claude 的意见：
 - “用户只看结果和反馈、数据回写、规则和 Prompt 持续优化”这一半与现有设计一致，可以做。
 - “工具自动搜索、自动进入主页收集信息”这一半，与 `xhs-compliance-rules.md` 中“不自动登录、不批量抓取”的基线冲突，也会让用于私信的账号面临被限制的风险，Claude 不建议实施，也不会实现绕过平台检测的自动化。是否修改这条基线由用户决定，见 DECISION-006。
 - 合规范围内的替代：用户手动滑动搜索结果并录屏，系统从录屏中识别账号、广告标记和主页信息（人工浏览、系统读取），作为截图录入的增强版。
+
+## 实现说明（2026-10-03，Claude）
+
+与上文流程的一处差异：设计稿里“读图提取”和“单店判断”是两次模型调用。实现时合并为一次读图调用，模型只原样摘抄截图里的文字（面料、价格、门店、日期等），四个信号和分档全部由程序根据这些摘抄计算。这样模型负责“看到什么”，程序负责“怎么判断”，规则可读、可改、可回滚，每家店也少一次调用。
+
+| 用户决定 | 代码位置 |
+|---|---|
+| 先逐家读图，最后统一比较 | `services/worker/screening_graph.py` 的 `fan_out`（`Send`）与 `rank` |
+| 失败跳过并说明原因 | 同上 `read_shop` 与 `classify_error`；服务错误自动重试一次（`services/worker/screening.py`） |
+| 模型看、程序判，规则版本化 | `packages/agent_core/screening.py` 的 `screen_shop`、`rank_key`、`assign_routes`，版本 `screening-rules-v0` |
+| 整批只审核一次 | `screening_graph.py` 的 `batch_review`（`interrupt`）；前端“批量初筛”页 |
+| 每批 10 家、每家 3 张 | `MAX_SHOPS_PER_BATCH`、`MAX_IMAGES_PER_SHOP` |
+| 原图保存 10 天 | `SCREENSHOT_RETENTION_DAYS`、`purge_old_uploads()` |
+| 分档同意/不同意标注 | 批次审核结果中的 `tier_feedback`、`note` |
+
+读图 Prompt：`prompts/shop_extraction/v1/system.md`。入选店铺复用现有单店工作流，路线按批量审核结果预设，直接进入文案审核。

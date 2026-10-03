@@ -21,6 +21,7 @@ from .models import (
     QuotaUsage,
     RunEvent,
     RunSnapshot,
+    ScreeningBatch,
     ShopLead,
     WorkflowRun,
 )
@@ -553,6 +554,39 @@ class RunStore:
                 event_type="run_expired",
             )
         return stale
+
+    def save_batch(self, batch_id: str, status: str, payload: dict[str, Any]) -> None:
+        now = utc_now()
+        with Session(self.engine) as session:
+            batch = session.get(ScreeningBatch, batch_id)
+            if batch is None:
+                batch = ScreeningBatch(id=batch_id, status=status, created_at=now)
+                session.add(batch)
+            batch.status = status
+            batch.shop_count = len(payload.get("results", []))
+            batch.payload_json = json.dumps(payload, ensure_ascii=False)
+            batch.updated_at = now
+            session.commit()
+
+    def get_batch(self, batch_id: str) -> dict[str, Any] | None:
+        with Session(self.engine) as session:
+            batch = session.get(ScreeningBatch, batch_id)
+            return json.loads(batch.payload_json) if batch else None
+
+    def list_batches(self, limit: int = 30) -> list[dict[str, Any]]:
+        with Session(self.engine) as session:
+            statement = (
+                select(ScreeningBatch).order_by(ScreeningBatch.created_at.desc()).limit(limit)
+            )
+            return [
+                {
+                    "id": row.id,
+                    "status": row.status,
+                    "shop_count": row.shop_count,
+                    "created_at": row.created_at.isoformat(),
+                }
+                for row in session.exec(statement)
+            ]
 
     def get(self, run_id: str) -> dict[str, Any] | None:
         with Session(self.engine) as session:

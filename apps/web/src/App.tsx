@@ -5,6 +5,7 @@ import {
   CircleDot,
   Clock3,
   FileText,
+  Images,
   Inbox,
   MessageCircle,
   PauseCircle,
@@ -15,11 +16,13 @@ import {
   X,
 } from 'lucide-react'
 import './App.css'
+import { api, keyPart } from './api'
+import ScreeningView from './Screening'
 
 type Channel = 'dm' | 'comment' | 'none'
 type ContactBasis = 'cold_outreach' | 'prior_conversation' | 'inbound_inquiry' | 'explicit_permission'
 type Stage = 'route_review' | 'content_review' | 'scheduled' | 'opened' | 'sent' | 'failed' | 'read_no_reply' | 'blocked'
-type View = 'workflow' | 'queue' | 'risk'
+type View = 'screening' | 'workflow' | 'queue' | 'risk'
 type ShopType = 'suit_custom' | 'menswear' | 'apparel_studio' | 'content_creator' | 'staff_account' | 'hobbyist' | 'supplier' | 'other'
 
 type Run = {
@@ -65,31 +68,6 @@ type RiskEvent = {
   type: string
   message: string
   created_at: string
-}
-
-const API = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
-
-// Header values must be ASCII, so free text is reduced to a short hash.
-function keyPart(text: string): string {
-  let hash = 0
-  for (let index = 0; index < text.length; index += 1) hash = (Math.imul(hash, 31) + text.charCodeAt(index)) | 0
-  return (hash >>> 0).toString(36)
-}
-
-async function api<T>(path: string, options?: RequestInit): Promise<T> {
-  // Spread options first: spreading it last replaced the merged headers and
-  // dropped Content-Type, so the API rejected the JSON body with 422.
-  const response = await fetch(`${API}${path}`, {
-    ...options,
-    headers: { 'Content-Type': 'application/json', ...(options?.headers || {}) },
-  })
-  const body = await response.json()
-  if (!response.ok) {
-    if (typeof body.detail === 'string') throw new Error(body.detail)
-    if (Array.isArray(body.detail)) throw new Error('提交的内容不符合要求：' + body.detail.map((item: { loc?: unknown[]; msg?: string }) => `${(item.loc || []).slice(1).join('.')} ${item.msg || ''}`).join('；'))
-    throw new Error('请求未完成')
-  }
-  return body as T
 }
 
 function App() {
@@ -238,6 +216,7 @@ function App() {
         <div className="brand-mark"><ShieldCheck size={18} /></div>
         <div className="brand-copy"><span>local agent</span><strong>运营工作台</strong></div>
         <nav>
+          <button className={`nav-item ${view === 'screening' ? 'active' : ''}`} type="button" onClick={() => setView('screening')}><Images size={16} />批量初筛</button>
           <button className={`nav-item ${view === 'workflow' ? 'active' : ''}`} type="button" onClick={() => setView('workflow')}><Inbox size={16} />候选工作流</button>
           <button className={`nav-item ${view === 'queue' ? 'active' : ''}`} type="button" onClick={() => setView('queue')}><Clock3 size={16} />定时队列</button>
           <button className={`nav-item ${view === 'risk' ? 'active' : ''}`} type="button" onClick={() => setView('risk')}><FileText size={16} />风险记录</button>
@@ -247,7 +226,7 @@ function App() {
 
       <main className="main-content">
         <header className="topbar">
-          <div><p className="eyebrow">XIAOHONGSHU / PERSONAL</p><h1>{view === 'workflow' ? '候选工作流' : view === 'queue' ? '定时队列' : '风险记录'}</h1></div>
+          <div><p className="eyebrow">XIAOHONGSHU / PERSONAL</p><h1>{view === 'screening' ? '批量初筛' : view === 'workflow' ? '候选工作流' : view === 'queue' ? '定时队列' : '风险记录'}</h1></div>
           <div className="quota-strip">
             <div><span>私信</span><strong>{summary ? `${summary.dm.used}/${summary.dm.limit}` : '--'}</strong></div>
             <div><span>评论</span><strong>{summary ? `${summary.comment.used}/${summary.comment.limit}` : '--'}</strong></div>
@@ -258,6 +237,7 @@ function App() {
 
         {error && <div className="alert error"><AlertTriangle size={15} />{error}<button className="alert-close" type="button" onClick={() => setError('')}><X size={14} /></button></div>}
 
+        {view === 'screening' && <ScreeningView onOpenWorkflow={() => { setView('workflow'); refresh().catch((cause: Error) => setError(cause.message)) }} />}
         {view === 'workflow' && <div className="workspace-grid">
           <div className="flow-column">
             <section className="panel">
