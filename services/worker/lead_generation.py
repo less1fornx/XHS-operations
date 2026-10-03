@@ -49,6 +49,7 @@ def build_agent_input(
     return LeadAgentInput(
         case_id=state.get("workflow_run_id") or state.get("task_id") or "run",
         shop_name=state["shop_name"][:200],
+        xhs_account=(state.get("xhs_id") or None),
         profile_url=state.get("profile_url") or None,
         shop_type=state.get("shop_type") or "suit_custom",
         activity_note=(state.get("activity_note") or "").strip()[:1000] or "人工未填写活跃情况",

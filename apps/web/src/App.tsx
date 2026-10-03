@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   Check,
   ChevronDown,
+  Pencil,
   CircleDot,
   Clock3,
   Copy,
@@ -34,6 +35,10 @@ type Run = {
   stage: Stage | string
   state: {
     shop_name: string
+    xhs_id?: string
+    contact_history?: { status: string; do_not_contact: boolean; last_touched_at: string } | null
+    model_draft?: string
+    draft_edits?: DraftEditRecord[]
     profile_url?: string
     video_text: string
     fit_score?: number
@@ -57,6 +62,8 @@ type Run = {
     reply?: ReplyState
   }
 }
+
+type DraftEditRecord = { at: string; stage: string; ops: { op: string; before: string; after: string }[]; reasons: string[]; note?: string | null }
 
 type Summary = {
   status: string
@@ -107,7 +114,8 @@ function localNow(): string {
 // otherwise a Xiaohongshu search for the shop name. It is a plain link the human
 // clicks; the system never operates the page.
 function shopUrl(run: Run): string {
-  return run.state.profile_url || `https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(run.state.shop_name)}`
+  // Search by 小红书号 when we have it: names repeat, the id points at one account.
+  return run.state.profile_url || `https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(run.state.xhs_id || run.state.shop_name)}`
 }
 
 // Browsers only allow a new tab opened directly by the click, so open it first
@@ -136,6 +144,11 @@ function App() {
   const [summary, setSummary] = useState<Summary | null>(null)
   const [shopName, setShopName] = useState('')
   const [profileUrl, setProfileUrl] = useState('')
+  const [xhsId, setXhsId] = useState('')
+  const [editReasons, setEditReasons] = useState<string[]>([])
+  const [editNote, setEditNote] = useState('')
+  const [editing, setEditing] = useState(false)
+  const [reasonOptions, setReasonOptions] = useState<Record<string, string>>({})
   const [contactBasis, setContactBasis] = useState<ContactBasis>('cold_outreach')
   const [contactBasisNote, setContactBasisNote] = useState('')
   const [videoText, setVideoText] = useState('')
@@ -189,7 +202,14 @@ function App() {
     setDraft(selected?.state.draft || '')
     setScheduledFor(selected?.state.scheduled_for || '')
     setResultNote('')
+    setEditReasons([])
+    setEditNote('')
+    setEditing(false)
   }, [selectedId, selected?.state.draft, selected?.state.scheduled_for])
+
+  useEffect(() => {
+    api<{ reasons: Record<string, string> }>('/api/edit-options').then((data) => setReasonOptions(data.reasons)).catch(() => undefined)
+  }, [])
 
   useEffect(() => {
     const timer = window.setInterval(() => setClock(Date.now()), 15000)
@@ -228,9 +248,10 @@ function App() {
     void runAction(async () => {
       const next = await api<Run>('/api/runs', {
         method: 'POST',
-        body: JSON.stringify({ shop_name: shopName, profile_url: profileUrl || null, contact_basis: contactBasis, contact_basis_note: contactBasisNote || null, video_text: videoText, shop_type: shopType, shop_note: shopNote || null, activity_note: activityNote || null, purchase_signal_note: purchaseSignalNote || null }),
+        body: JSON.stringify({ shop_name: shopName, xhs_id: xhsId || null, profile_url: profileUrl || null, contact_basis: contactBasis, contact_basis_note: contactBasisNote || null, video_text: videoText, shop_type: shopType, shop_note: shopNote || null, activity_note: activityNote || null, purchase_signal_note: purchaseSignalNote || null }),
       })
       setShopName('')
+      setXhsId('')
       setProfileUrl('')
       setContactBasis('cold_outreach')
       setContactBasisNote('')
@@ -257,13 +278,21 @@ function App() {
   const submitContent = (run: Run, approved: boolean, when: string) => api<Run>(`/api/runs/${run.id}/content`, {
     method: 'POST',
     headers: { 'Idempotency-Key': `content-${run.id}-${approved}-${keyPart(draft)}-${keyPart(when)}` },
-    body: JSON.stringify({ approved, edited_text: draft, scheduled_for: when || null }),
+    body: JSON.stringify({ approved, edited_text: draft, scheduled_for: when || null, edit_reasons: editReasons, edit_note: editNote || null }),
   })
 
   const markOpened = (run: Run) => api<Run>(`/api/runs/${run.id}/open`, {
     method: 'POST',
     headers: { 'Idempotency-Key': `open-${run.id}` },
   })
+
+  const saveDraftEdit = () => {
+    if (!selected) return
+    void runAction(() => api<Run>(`/api/runs/${selected.id}/draft`, {
+      method: 'POST',
+      body: JSON.stringify({ text: draft, edit_reasons: editReasons, edit_note: editNote || null }),
+    }))
+  }
 
   const rejectContent = () => {
     if (!selected) return
@@ -347,11 +376,28 @@ function App() {
     {!!selected.state.evidence?.length && <div><span>模型看到的证据</span><ul>{selected.state.evidence.map((item) => <li key={item}>{item}</li>)}</ul></div>}
     {selected.state.model_meta && <small className="muted">{selected.state.model_meta.provider} · {selected.state.model_meta.model} · {selected.state.model_meta.prompt_version} · {selected.state.model_meta.latency_ms} ms</small>}
   </div> : null
-  // The approved text stays visible in every later stage.
-  const finalText = selected && selected.state.draft && !['route_review', 'content_review'].includes(selected.stage) ? <div className="final-text">
-    <div className="final-text-head"><span>{selected.state.channel === 'dm' ? '私信文案' : '评论文案'}</span><button className="secondary-button small" type="button" onClick={() => void copyText(selected.state.draft || '')}><Copy size={13} />复制文案</button></div>
-    <p>{selected.state.draft}</p>
+  const changed = !!selected && draft !== (selected.state.draft || '')
+  const reasonPicker = changed ? <div className="edit-reasons">
+    <span className="field-title">你改了文案。为什么改？（可多选，可不选；用来改进以后的草稿）</span>
+    <div>{Object.entries(reasonOptions).map(([key, label]) => <button type="button" key={key} className={editReasons.includes(key) ? 'tag active' : 'tag'} onClick={() => setEditReasons((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key])}>{label}</button>)}</div>
+    <input value={editNote} onChange={(event) => setEditNote(event.target.value)} placeholder="补充说明（可选），例如：这家是企业号，要写短一些" />
   </div> : null
+  const editHistory = selected?.state.draft_edits?.length ? <details className="more-detail"><summary>修改记录（{selected.state.draft_edits.length} 次）</summary>
+    {selected.state.draft_edits.map((item, index) => <div className="edit-record" key={index}>
+      <small>第 {index + 1} 次 · {item.reasons.length ? item.reasons.map((reason) => reasonOptions[reason] || reason).join('、') : '未填原因'}{item.note ? ` · ${item.note}` : ''}</small>
+      {item.ops.map((op, opIndex) => <p key={opIndex}>{op.before && <del>{op.before}</del>}{op.after && <ins>{op.after}</ins>}</p>)}
+    </div>)}
+  </details> : null
+  // The approved text stays visible in every later stage.
+  const canEditFinal = !!selected && ['scheduled', 'opened'].includes(selected.stage)
+  const finalText = selected && selected.state.draft && !['route_review', 'content_review'].includes(selected.stage) ? <>
+    <div className="final-text">
+      <div className="final-text-head"><span>{selected.state.channel === 'dm' ? '私信文案' : '评论文案'}</span><span className="head-actions">{canEditFinal && !editing && <button className="secondary-button small" type="button" onClick={() => setEditing(true)}><Pencil size={13} />修改</button>}<button className="secondary-button small" type="button" onClick={() => void copyText(editing ? draft : selected.state.draft || '')}><Copy size={13} />复制文案</button></span></div>
+      {editing ? <textarea className="draft-editor inline" value={draft} onChange={(event) => setDraft(event.target.value)} /> : <p>{selected.state.draft}</p>}
+    </div>
+    {editing && <>{reasonPicker}<div className="button-row"><button className="secondary-button" type="button" disabled={busy} onClick={() => { setDraft(selected.state.draft || ''); setEditing(false) }}>取消</button><button className="primary-button" type="button" disabled={busy || !changed || !draft.trim()} onClick={saveDraftEdit}><Check size={14} />保存修改</button></div></>}
+    {editHistory}
+  </> : null
 
   return (
     <div className="app-shell">
@@ -404,6 +450,7 @@ function App() {
             <p className="muted form-hint">没有截图时用这里。带 <b className="req">*</b> 的必填，其余越具体，草稿越有针对性。</p>
             <div className="form-grid">
               <label>店铺名称 <b className="req">*</b><input value={shopName} onChange={(event) => setShopName(event.target.value)} placeholder="例如：上海某某西装定制" /></label>
+              <label>小红书号（主页上“小红书号：”后面的字符，用来唯一识别这家店）<input value={xhsId} onChange={(event) => setXhsId(event.target.value)} placeholder="例如：26807281026" /></label>
               <label>当前笔记或视频内容 <b className="req">*</b><textarea rows={3} value={videoText} onChange={(event) => setVideoText(event.target.value)} placeholder="粘贴对方公开发布的内容，模型只能依据这里填写的事实" /></label>
               <label>店铺情况<textarea rows={2} value={shopNote} onChange={(event) => setShopNote(event.target.value)} placeholder="主页简介、定位、客单价、主营品类" /></label>
               <div className="form-two">
@@ -428,9 +475,10 @@ function App() {
             {!selected && <div className="empty-state"><PauseCircle size={30} /><p>从左边选一条任务，这里会显示它的建议、文案和下一步操作。</p></div>}
             {selected && <>
               <div className="panel-heading">
-                <div><p className="section-kicker">{channelLabel[selected.state.channel || selected.state.suggested_channel || ''] || '待定'}</p><h2>{selected.state.shop_name}</h2></div>
+                <div><p className="section-kicker">{channelLabel[selected.state.channel || selected.state.suggested_channel || ''] || '待定'}</p><h2>{selected.state.shop_name}</h2><small className="muted">{selected.state.xhs_id ? `小红书号：${selected.state.xhs_id}` : '没有小红书号，发送时按店名搜索，可能需要你在结果里找'}</small></div>
                 <span className={`badge ${stageBadge[selected.stage] || 'neutral'}`}>{stageLabel[selected.stage] || selected.stage}</span>
               </div>
+              {selected.state.contact_history && <div className="status-card warn"><AlertTriangle size={18} /><div><strong>这个账号以前联系过</strong><p>上次联系：{new Date(selected.state.contact_history.last_touched_at).toLocaleDateString('zh-CN')}。请确认是否要再次联系。</p></div></div>}
               <ol className="stepper">{steps.map((label, index) => <li key={label} className={index < (stepIndex[selected.stage] ?? 0) ? 'done' : index === stepIndex[selected.stage] ? 'current' : ''}><span>{index < (stepIndex[selected.stage] ?? 0) ? <Check size={11} /> : index + 1}</span>{label}</li>)}</ol>
 
               {selected.stage === 'route_review' && <div className="decision-content">
@@ -445,10 +493,11 @@ function App() {
               {selected.stage === 'content_review' && <div className="decision-content">
                 <label className="draft-label">{selected.state.channel === 'dm' ? '私信文案' : '评论文案'}（可直接修改）<textarea className="draft-editor" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="模型没有生成草稿，请人工撰写" /></label>
                 <div className="risk-row"><ShieldCheck size={14} />{selected.state.model_route === selected.state.channel ? '草稿由模型生成，已通过策略检查。提交时会对你改过的文案再检查一次。' : (draft ? '你改了路线，模型已按新路线重新生成草稿。提交时会再做策略检查。' : (selected.state.model_error || '模型没有生成草稿，请人工撰写；提交时会做策略检查。'))}<span className="char-count">{draft.length} 字</span></div>
+                {reasonPicker}
                 <div className="send-options">
                   <div className="send-option primary">
                     <strong>现在就去发</strong>
-                    <p>文案会自动复制，并在新标签页{selected.state.profile_url ? '打开对方主页' : '打开小红书搜索这家店'}，你粘贴发送后回来确认结果。</p>
+                    <p>文案会自动复制，并在新标签页{selected.state.profile_url ? '打开对方主页' : selected.state.xhs_id ? '按小红书号搜索这家店' : '按店名搜索这家店'}，你粘贴发送后回来确认结果。</p>
                     <button className="primary-button" type="button" disabled={busy || !draft.trim() || frozen} onClick={() => void sendNow()}><Send size={14} />通过并现在去发</button>
                   </div>
                   <div className="send-option">
@@ -469,7 +518,7 @@ function App() {
               </div>}
 
               {selected.stage === 'opened' && <div className="decision-content">
-                <div className={`status-card ${minutesSending !== null && minutesSending >= 2 ? 'warn' : 'info'}`}><Send size={18} /><div><strong>{minutesSending !== null && minutesSending >= 2 ? `已经过去 ${minutesSending} 分钟，发送成功了吗？` : '发送成功了吗？'}</strong><p>请在小红书里把文案发出去，然后回来点下面的按钮。</p><a className="link-button" href={shopUrl(selected)} target="_blank" rel="noreferrer">{selected.state.profile_url ? '再次打开对方主页' : '再次打开小红书搜索这家店'}</a></div></div>
+                <div className={`status-card ${minutesSending !== null && minutesSending >= 2 ? 'warn' : 'info'}`}><Send size={18} /><div><strong>{minutesSending !== null && minutesSending >= 2 ? `已经过去 ${minutesSending} 分钟，发送成功了吗？` : '发送成功了吗？'}</strong><p>请在小红书里把文案发出去，然后回来点下面的按钮。</p><a className="link-button" href={shopUrl(selected)} target="_blank" rel="noreferrer">{selected.state.profile_url ? '再次打开对方主页' : selected.state.xhs_id ? `再次搜索小红书号 ${selected.state.xhs_id}` : '再次按店名搜索'}</a></div></div>
                 {finalText}
                 <label>备注（可选）<input value={resultNote} onChange={(event) => setResultNote(event.target.value)} placeholder="例如：提示对方未关注，只能发一条" /></label>
                 <div className="button-row spread">

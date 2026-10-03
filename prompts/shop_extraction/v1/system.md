@@ -12,7 +12,8 @@
 
 1. 列表类字段（price_mentions、fabric_mentions、high_end_mentions、store_mentions、recent_post_dates、content_topics）必须**原样摘抄**截图上的文字，不改写、不总结。没有就返回空列表。
 2. 看不清、被遮挡、截图里没有的字段：字符串字段填空字符串或 null，并把字段名写进 unclear_fields。不得猜测。
-3. shop_name 填主页上显示的账号名称；截图里找不到账号名称时填空字符串，并把 shop_name 写进 unclear_fields。
+3. xhs_id：主页上“小红书号：”后面的字符，原样抄写，不含“小红书号”这几个字；主页没有显示小红书号（例如只显示认证公司名）时填 null，不得用账号名称代替。
+3a. shop_name 填主页上显示的账号名称；截图里找不到账号名称时填空字符串，并把 shop_name 写进 unclear_fields。
 4. account_kind：名称下方有蓝色认证标记和公司名的填 `enterprise_verified`；能看到是个人账号的填 `personal`；无法判断填 `unknown`。
 5. shop_type 按主页内容判断：
    - `suit_custom`：西装定制店（定制、量体、门店、预约到店等）

@@ -31,7 +31,8 @@ LAB_SOURCE = PROJECT_ROOT / "labs" / "phase0-langgraph" / "src"
 if str(LAB_SOURCE) not in sys.path:
     sys.path.insert(0, str(LAB_SOURCE))
 
-from phase0_graph.lead_workflow import build_graph  # noqa: E402
+from phase0_graph.lead_workflow import build_graph, policy_flags  # noqa: E402
+from packages.agent_core.edits import EDIT_REASONS, describe_edit  # noqa: E402
 from packages.agent_core.providers import provider_from_env  # noqa: E402
 from services.worker.lead_generation import build_suggester, load_product_facts  # noqa: E402
 from packages.agent_core.screening import (  # noqa: E402
@@ -40,6 +41,7 @@ from packages.agent_core.screening import (  # noqa: E402
     ShopExtraction,
     ShopScreening,
     ShopType as ScreeningShopType,
+    normalize_xhs_id,
     to_lead_context,
     today_in_shanghai,
 )
@@ -125,7 +127,7 @@ graph_lock = Lock()
 shop_extractor = shop_extractor_from_env()
 batch_graph = build_batch_graph(
     make_read_shop(store, shop_extractor),
-    lambda name: store.is_do_not_contact(name),
+    lambda name, xhs_id="": store.is_do_not_contact(name, None, xhs_id),
     today_in_shanghai,
     checkpointer=checkpointer,
 )
@@ -139,6 +141,7 @@ class RunCreate(BaseModel):
     shop_name: str = Field(min_length=1)
     video_text: str = Field(min_length=1)
     profile_url: str | None = None
+    xhs_id: str | None = Field(default=None, max_length=100)
     contact_basis: ContactBasis = "cold_outreach"
     contact_basis_note: str | None = None
     shop_type: ShopType = "suit_custom"
@@ -158,6 +161,14 @@ class ContentDecision(BaseModel):
     approved: bool
     edited_text: str | None = None
     scheduled_for: str | None = None
+    edit_reasons: list[str] = Field(default_factory=list, max_length=10)
+    edit_note: str | None = Field(default=None, max_length=500)
+
+
+class DraftEdit(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+    edit_reasons: list[str] = Field(default_factory=list, max_length=10)
+    edit_note: str | None = Field(default=None, max_length=500)
 
 
 class EndDecision(BaseModel):
@@ -327,14 +338,17 @@ def validate_schedule(value: str) -> None:
 
 
 def start_run(payload: RunCreate) -> dict[str, Any]:
-    if store.is_do_not_contact(payload.shop_name, payload.profile_url):
+    xhs_id = normalize_xhs_id(payload.xhs_id)
+    if store.is_do_not_contact(payload.shop_name, payload.profile_url, xhs_id):
         raise HTTPException(
             status_code=409,
             detail="该店铺已被标记为不再触达，不会进入后续评选",
         )
     run_id = str(uuid4())
     initial_state = {
-        "lead_id": store.find_lead_id(payload.shop_name, payload.profile_url) or str(uuid4()),
+        "lead_id": store.find_lead_id(payload.shop_name, payload.profile_url, xhs_id) or str(uuid4()),
+        "xhs_id": xhs_id,
+        "contact_history": store.contact_history(payload.shop_name, payload.profile_url, xhs_id),
         "evidence_id": str(uuid4()),
         "task_id": str(uuid4()),
         "workflow_run_id": run_id,
@@ -463,6 +477,17 @@ def decide_content(
         if reserved and state.get("task_status") == "blocked":
             store.release_quota(record["state"]["task_id"], record["state"].get("channel", ""))
             reserved = False
+        # Keep exactly what the human changed, and why, for later prompt work.
+        original = record["state"].get("draft") or ""
+        if payload.approved and payload.edited_text and payload.edited_text != original:
+            state = {
+                **state,
+                "draft_edits": [
+                    *record["state"].get("draft_edits", []),
+                    describe_edit(original, payload.edited_text, payload.edit_reasons, payload.edit_note,
+                                  "content_review", datetime.now().isoformat()),
+                ],
+            }
         return save_result(
             run_id,
             state,
@@ -497,6 +522,35 @@ def end_run(
     except BusinessRuleError as exc:
         status = 404 if exc.code == "run_not_found" else 409
         raise HTTPException(status_code=status, detail=f"{exc.code}: {exc.message}") from exc
+
+
+@app.get("/api/edit-options")
+def edit_options() -> dict[str, Any]:
+    return {"reasons": EDIT_REASONS}
+
+
+@app.post("/api/runs/{run_id}/draft")
+def edit_draft(run_id: str, payload: DraftEdit) -> dict[str, Any]:
+    record = store.get(run_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Run not found")
+    before = record["state"].get("draft") or ""
+    if payload.text == before:
+        return record
+    flags = policy_flags({"draft": payload.text, "channel": record["state"].get("channel")})
+    if flags:
+        raise HTTPException(
+            status_code=409,
+            detail="policy_blocked: 修改后的文案包含不允许的内容（站外联系方式，或评论中的销售话术），没有保存",
+        )
+    try:
+        return store.update_draft(
+            run_id, payload.text,
+            describe_edit(before, payload.text, payload.edit_reasons, payload.edit_note,
+                          record["stage"], datetime.now().isoformat()),
+        )
+    except BusinessRuleError as exc:
+        raise HTTPException(status_code=409, detail=f"{exc.code}: {exc.message}") from exc
 
 
 @app.post("/api/runs/{run_id}/open")
@@ -702,7 +756,8 @@ def draft_selected_shops(batch_id: str, selected: list[tuple[dict[str, Any], str
 
 
 class ShopCorrection(BaseModel):
-    shop_type: ScreeningShopType
+    shop_type: ScreeningShopType | None = None
+    xhs_id: str | None = Field(default=None, max_length=100)
 
 
 @app.post("/api/batches/{batch_id}/shops/{shop_key}/correct")
@@ -716,15 +771,19 @@ def correct_batch_shop(batch_id: str, shop_key: str, payload: ShopCorrection) ->
     target = next((r for r in current["results"] if r["shop_key"] == shop_key and r["status"] == "read"), None)
     if target is None:
         raise HTTPException(status_code=404, detail="找不到这家店的识别结果")
-    before = target["extraction"]["shop_type"]
-    target["extraction"]["shop_type"] = payload.shop_type
-    current["corrections"] = [
-        *current.get("corrections", []),
-        {"shop_key": shop_key, "field": "shop_type", "before": before, "after": payload.shop_type,
-         "at": datetime.now().isoformat()},
-    ]
+    changes = {"shop_type": payload.shop_type, "xhs_id": payload.xhs_id}
+    for field, value in changes.items():
+        if value is None:
+            continue
+        current["corrections"] = [
+            *current.get("corrections", []),
+            {"shop_key": shop_key, "field": field, "before": target["extraction"].get(field),
+             "after": value, "at": datetime.now().isoformat()},
+        ]
+        target["extraction"][field] = value
     current["ranked"] = rank_results(
-        current["results"], today_in_shanghai(), lambda name: store.is_do_not_contact(name),
+        current["results"], today_in_shanghai(),
+        lambda name, xhs_id="": store.is_do_not_contact(name, None, xhs_id),
         current["dm_slots"], current["comment_slots"],
     )
     store.save_batch(batch_id, current["status"], current)

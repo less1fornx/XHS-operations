@@ -130,7 +130,7 @@ def test_batch_reads_each_shop_isolates_failures_and_waits_for_review(tmp_path) 
     store = make_store(tmp_path)
     graph = build_batch_graph(
         make_read_shop(store, MockShopExtractor()),
-        lambda name: name == "勿扰店",
+        lambda name, xhs_id="": name == "勿扰店",
         lambda: TODAY,
     )
     shops = [
@@ -184,9 +184,9 @@ def test_correcting_shop_type_re_tiers_the_shop() -> None:
         recent_post_dates=["昨天"],
     )
     results = [{"shop_key": "shop_0", "status": "read", "extraction": misread.model_dump()}]
-    before = rank_results(results, TODAY, lambda name: False, 5, 3)
+    before = rank_results(results, TODAY, lambda name, xhs_id="": False, 5, 3)
     results[0]["extraction"]["shop_type"] = "suit_custom"
-    after = rank_results(results, TODAY, lambda name: False, 5, 3)
+    after = rank_results(results, TODAY, lambda name, xhs_id="": False, 5, 3)
 
     assert before[0]["screening"]["tier"] == "medium"
     assert after[0]["screening"]["tier"] == "high"
@@ -197,7 +197,7 @@ def test_non_shop_images_are_reported_as_not_a_shop_page(tmp_path) -> None:
     store = make_store(tmp_path)
     chat = shop(page_kind="other", page_summary="小红书私信对话界面", shop_name="", shop_type="unknown")
     graph = build_batch_graph(
-        make_read_shop(store, MockShopExtractor({"chat": chat})), lambda name: False, lambda: TODAY
+        make_read_shop(store, MockShopExtractor({"chat": chat})), lambda name, xhs_id="": False, lambda: TODAY
     )
     shops = [{"batch_id": "b2", "shop_key": "shop_0", "image_paths": write_images(tmp_path, "chat.jpg")}]
 

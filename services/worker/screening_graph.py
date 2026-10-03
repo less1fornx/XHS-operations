@@ -33,6 +33,7 @@ from langgraph.types import Send, interrupt
 from packages.agent_core.screening import (
     NotShopPageError,
     ShopExtraction,
+    normalize_xhs_id,
     assign_routes,
     rank_key,
     screen_shop,
@@ -72,7 +73,7 @@ def classify_error(exc: Exception) -> str:
 def rank_results(
     results: list[dict[str, Any]],
     today: date,
-    is_do_not_contact: Callable[[str], bool],
+    is_do_not_contact: Callable[[str, str], bool],
     dm_slots: int,
     comment_slots: int,
 ) -> list[dict[str, Any]]:
@@ -85,14 +86,16 @@ def rank_results(
         extraction = ShopExtraction.model_validate(result["extraction"])
         screening = screen_shop(extraction, today)
         name = extraction.shop_name.strip()
+        xhs_id = normalize_xhs_id(extraction.xhs_id)
+        key = (xhs_id or name).casefold()  # the 小红书号 identifies a shop; the name is only a fallback
         # Deterministic checks the model never gets a say in.
-        if is_do_not_contact(name):
+        if is_do_not_contact(name, xhs_id):
             screening.tier = "excluded"
             screening.tier_reasons = ["已在勿扰名单中"]
-        elif name in seen:
+        elif key in seen:
             screening.tier = "excluded"
             screening.tier_reasons = ["本批中重复上传的店铺"]
-        seen.add(name)
+        seen.add(key)
         scored.append((rank_key(screening, extraction), result, screening))
 
     scored.sort(key=lambda item: item[0])
@@ -105,7 +108,7 @@ def rank_results(
 
 def build_batch_graph(
     read_shop_fn: ReadShop,
-    is_do_not_contact: Callable[[str], bool],
+    is_do_not_contact: Callable[[str, str], bool],
     today_fn: Callable[[], date],
     checkpointer=None,
 ):

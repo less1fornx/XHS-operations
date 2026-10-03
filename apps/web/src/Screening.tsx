@@ -12,6 +12,7 @@ type SignalValue = 'yes' | 'no' | 'unknown'
 
 type Extraction = {
   shop_name: string
+  xhs_id?: string | null
   account_kind: string
   shop_type: string
   bio_text: string
@@ -137,12 +138,13 @@ export default function ScreeningView({ onOpenWorkflow }: { onOpenWorkflow: () =
   }
 
   // Human correction of a misread shop type; the server re-tiers the whole batch.
-  const correctType = async (key: string, shopType: string) => {
+  const correctType = (key: string, shopType: string) => correct(key, { shop_type: shopType })
+  const correct = async (key: string, change: { shop_type?: string; xhs_id?: string }) => {
     if (!batch) return
     setBusy(true)
     setError('')
     try {
-      const next = await api<Batch>(`/api/batches/${batch.id}/shops/${key}/correct`, { method: 'POST', body: JSON.stringify({ shop_type: shopType }) })
+      const next = await api<Batch>(`/api/batches/${batch.id}/shops/${key}/correct`, { method: 'POST', body: JSON.stringify(change) })
       setBatch(next)
       setDecisions((current) => {
         const merged: Record<string, Decision> = {}
@@ -221,6 +223,7 @@ export default function ScreeningView({ onOpenWorkflow }: { onOpenWorkflow: () =
                 <div><strong>{e.shop_name}</strong><small>{locked ? (typeLabel[e.shop_type] || e.shop_type) : <select className="type-select" value={e.shop_type} disabled={busy} title="模型认错了就在这里改，改完会按规则重新分档" onChange={(event) => void correctType(item.shop_key, event.target.value)}>{Object.entries(typeLabel).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select>} · {e.account_kind === 'enterprise_verified' ? '企业认证' : '个人号'}{e.followers_text ? ` · 粉丝 ${e.followers_text}` : ''}{s.latest_post_age_days !== null ? ` · 最近更新 ${s.latest_post_age_days} 天前` : ''}</small></div>
                 <span className={`badge ${tierBadge[s.tier]}`}>{tierLabel[s.tier]}</span>
               </header>
+              <label className="id-row">小红书号{locked ? <span>{e.xhs_id || '未识别'}</span> : <input key={e.xhs_id || ''} defaultValue={e.xhs_id || ''} placeholder="截图里没有，可手动填写" onBlur={(event) => { if (event.target.value.trim() !== (e.xhs_id || '')) void correct(item.shop_key, { xhs_id: event.target.value.trim() }) }} />}</label>
               <div className="thumbs">{item.image_paths.map((path) => <a href={imageUrl(path)} target="_blank" rel="noreferrer" key={path}><img src={imageUrl(path)} alt="截图" onError={(event) => { event.currentTarget.replaceWith(Object.assign(document.createElement('span'), { className: 'muted', textContent: '原图已删除' })) }} /></a>)}</div>
               <p className="reasons">{s.tier_reasons.join('；')}</p>
               {Object.keys(s.signals).length > 0 && <div className="signals">

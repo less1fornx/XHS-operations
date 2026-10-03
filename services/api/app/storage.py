@@ -111,36 +111,62 @@ class RunStore:
                 "comment": {"used": usage.comment_new_count, "limit": comment_limit},
             }
 
-    def is_do_not_contact(self, display_name: str, profile_url: str | None = None) -> bool:
-        normalized_name = display_name.strip().casefold()
-        normalized_url = (profile_url or "").strip().rstrip("/").casefold()
-        with Session(self.engine) as session:
-            leads = session.exec(
-                select(ShopLead).where(
-                    ShopLead.platform_account_id == DEFAULT_ACCOUNT_ID,
-                    ShopLead.do_not_contact == True,  # noqa: E712
-                )
-            )
-            for lead in leads:
-                if lead.display_name.strip().casefold() == normalized_name:
-                    return True
-                if normalized_url and (lead.profile_url or "").strip().rstrip("/").casefold() == normalized_url:
-                    return True
-        return False
+    @staticmethod
+    def _same_shop(lead: ShopLead, name: str, url: str, xhs_id: str) -> bool:
+        """The 小红书号 decides when both sides have one; name and URL are fallbacks."""
+        lead_id = (lead.handle or "").strip().casefold()
+        if xhs_id and lead_id:
+            return xhs_id == lead_id
+        if lead.display_name.strip().casefold() == name:
+            return True
+        return bool(url) and (lead.profile_url or "").strip().rstrip("/").casefold() == url
 
-    def find_lead_id(self, display_name: str, profile_url: str | None = None) -> str | None:
-        normalized_name = display_name.strip().casefold()
-        normalized_url = (profile_url or "").strip().rstrip("/").casefold()
-        with Session(self.engine) as session:
-            leads = session.exec(
-                select(ShopLead).where(ShopLead.platform_account_id == DEFAULT_ACCOUNT_ID)
-            )
+    def _find_lead(
+        self, session: Session, display_name: str, profile_url: str | None, xhs_id: str | None
+    ) -> ShopLead | None:
+        name = display_name.strip().casefold()
+        url = (profile_url or "").strip().rstrip("/").casefold()
+        key = (xhs_id or "").strip().casefold()
+        leads = session.exec(
+            select(ShopLead).where(ShopLead.platform_account_id == DEFAULT_ACCOUNT_ID)
+        ).all()
+        # Prefer an exact id match over a name match on an older record.
+        if key:
             for lead in leads:
-                if lead.display_name.strip().casefold() == normalized_name:
-                    return lead.id
-                if normalized_url and (lead.profile_url or "").strip().rstrip("/").casefold() == normalized_url:
-                    return lead.id
+                if (lead.handle or "").strip().casefold() == key:
+                    return lead
+        for lead in leads:
+            if self._same_shop(lead, name, url, key):
+                return lead
         return None
+
+    def is_do_not_contact(
+        self, display_name: str, profile_url: str | None = None, xhs_id: str | None = None
+    ) -> bool:
+        with Session(self.engine) as session:
+            lead = self._find_lead(session, display_name, profile_url, xhs_id)
+            return bool(lead and lead.do_not_contact)
+
+    def find_lead_id(
+        self, display_name: str, profile_url: str | None = None, xhs_id: str | None = None
+    ) -> str | None:
+        with Session(self.engine) as session:
+            lead = self._find_lead(session, display_name, profile_url, xhs_id)
+            return lead.id if lead else None
+
+    def contact_history(
+        self, display_name: str, profile_url: str | None = None, xhs_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """Whether this account was contacted before, looked up by 小红书号 first."""
+        with Session(self.engine) as session:
+            lead = self._find_lead(session, display_name, profile_url, xhs_id)
+            if lead is None or lead.last_touched_at is None:
+                return None
+            return {
+                "status": lead.contact_status,
+                "do_not_contact": lead.do_not_contact,
+                "last_touched_at": _aware(lead.last_touched_at).isoformat(),
+            }
 
     def reserve_quota(
         self,
@@ -561,6 +587,44 @@ class RunStore:
             )
         return stale
 
+    def update_draft(self, run_id: str, text: str, edit: dict[str, Any]) -> dict[str, Any]:
+        """Human changes an already-approved text before sending; the change is kept."""
+        with Session(self.engine) as session:
+            snapshot = session.get(RunSnapshot, run_id)
+            if snapshot is None:
+                raise BusinessRuleError("run_not_found", "工作流不存在")
+            if snapshot.stage not in ("scheduled", "opened"):
+                raise BusinessRuleError("invalid_transition", "只有待发送或发送中的文案可以在这里修改")
+            payload = json.loads(snapshot.payload_json)
+            state = payload["state"]
+            now = utc_now()
+            state["draft"] = text
+            state["draft_edits"] = [*state.get("draft_edits", []), edit]
+            state["trace"] = [*state.get("trace", []), "draft_edited"]
+            snapshot.payload_json = json.dumps(payload, ensure_ascii=False)
+            snapshot.updated_at = now
+            task = session.exec(
+                select(OutreachTask).where(OutreachTask.workflow_run_id == run_id)
+            ).first()
+            if task is not None:
+                task.final_text = text
+                task.updated_at = now
+                session.add(
+                    HumanReview(
+                        task_id=task.id,
+                        review_type="content_edit",
+                        decision="edit",
+                        before_text=edit["before"],
+                        after_text=text,
+                        reason=json.dumps(
+                            {"reasons": edit["reasons"], "note": edit["note"]}, ensure_ascii=False
+                        ),
+                    )
+                )
+            session.add(RunEvent(run_id=run_id, event_type="draft_edited", payload_json=json.dumps(payload, ensure_ascii=False), created_at=now))
+            session.commit()
+            return payload
+
     def save_contact_snapshot(self, run_id: str, state: dict[str, Any]) -> None:
         """Freeze what we knew and what we sent, once, when the human confirms sending."""
         with Session(self.engine) as session:
@@ -592,6 +656,11 @@ class RunStore:
                             "draft_edited_by_human": bool(
                                 state.get("model_draft") and state.get("model_draft") != state.get("draft")
                             ),
+                            "model_draft": state.get("model_draft"),
+                            "draft_edits": [
+                                {key: edit.get(key) for key in ("stage", "ops", "reasons", "note")}
+                                for edit in state.get("draft_edits", [])
+                            ],
                         },
                         ensure_ascii=False,
                     ),
@@ -914,6 +983,8 @@ class RunStore:
             )
             session.add(lead)
         lead.business_fit_score = state.get("fit_score")
+        if state.get("xhs_id"):
+            lead.handle = state.get("xhs_id")
         if state.get("profile_url"):
             lead.profile_url = state.get("profile_url")
         if state.get("task_status") == "read_no_reply":

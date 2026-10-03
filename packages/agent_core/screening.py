@@ -36,6 +36,9 @@ class ShopExtraction(StrictModel):
     page_kind: Literal["profile", "note_list", "note_detail", "other"] = "profile"
     page_summary: str = Field(default="", max_length=300)
     shop_name: str = Field(max_length=200)
+    # 小红书号 as printed on the profile. It is the unique key for a shop: names
+    # repeat and change, the id does not (user decision 2026-10-03).
+    xhs_id: str | None = Field(default=None, max_length=100)
     account_kind: Literal["enterprise_verified", "personal", "unknown"]
     shop_type: ShopType
     bio_text: str = Field(max_length=2000)
@@ -255,6 +258,16 @@ def assign_routes(ordered: list[ShopScreening], dm_slots: int, comment_slots: in
             screening.suggested_route = "none"
 
 
+def normalize_xhs_id(value: str | None) -> str:
+    """Strip the label and spaces. Case is kept for display and search; callers
+    compare case-insensitively."""
+    text = (value or "").strip()
+    for label in ("小红书号：", "小红书号:", "小红书号"):
+        if text.startswith(label):
+            text = text[len(label):]
+    return text.strip()
+
+
 def to_lead_context(extraction: ShopExtraction, screening: ShopScreening) -> dict[str, str]:
     """Map a screened shop onto the fields the drafting workflow already accepts."""
     profile_lines = [extraction.bio_text.strip()]
@@ -280,6 +293,7 @@ def to_lead_context(extraction: ShopExtraction, screening: ShopScreening) -> dic
         activity += f"；粉丝 {extraction.followers_text}"
     return {
         "shop_name": extraction.shop_name,
+        "xhs_id": normalize_xhs_id(extraction.xhs_id),
         "shop_type": extraction.shop_type,
         "shop_note": "\n".join(line for line in profile_lines if line),
         "activity_note": activity,
@@ -298,6 +312,7 @@ def today_in_shanghai() -> date:
 
 
 __all__ = [
+    "normalize_xhs_id",
     "NotShopPageError",
     "MAX_IMAGES_PER_SHOP",
     "MAX_SHOPS_PER_BATCH",
