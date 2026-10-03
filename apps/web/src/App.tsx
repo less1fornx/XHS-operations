@@ -100,6 +100,21 @@ function localNow(): string {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`
 }
 
+// Where "go send" takes the human: the shop's own page when we have its address,
+// otherwise a Xiaohongshu search for the shop name. It is a plain link the human
+// clicks; the system never operates the page.
+function shopUrl(run: Run): string {
+  return run.state.profile_url || `https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(run.state.shop_name)}`
+}
+
+// Browsers only allow a new tab opened directly by the click, so open it first
+// and point it at the shop once the approval has succeeded.
+function reserveTab(): Window | null {
+  const tab = window.open('about:blank', '_blank')
+  if (tab) tab.opener = null
+  return tab
+}
+
 function formatWhen(value?: string): string {
   if (!value) return '未设置时间'
   const parsed = new Date(value)
@@ -266,9 +281,9 @@ function App() {
 
   // The system never sends. "Send now" approves the text, copies it, opens the
   // shop page if we have its address, and then waits for the human to confirm.
-  const beginSending = async (run: Run, text: string) => {
+  const beginSending = async (run: Run, text: string, tab: Window | null) => {
     await copyText(text)
-    if (run.state.profile_url) window.open(run.state.profile_url, '_blank', 'noopener,noreferrer')
+    if (tab) tab.location.href = shopUrl(run)
     setSendStartedAt((current) => ({ ...current, [run.id]: Date.now() }))
     setClock(Date.now())
     setFilter('sending')
@@ -278,19 +293,23 @@ function App() {
     if (!selected) return
     const text = draft
     const run = selected
+    const tab = reserveTab()
     const next = await runAction(async () => {
       const approved = await submitContent(run, true, localNow())
       if (approved.stage !== 'scheduled') return approved
       return markOpened(approved)
     })
-    if (next?.stage === 'opened') await beginSending(next, text)
+    if (next?.stage === 'opened') await beginSending(next, text, tab)
+    else tab?.close()
   }
 
   const startScheduled = async () => {
     if (!selected) return
     const run = selected
+    const tab = reserveTab()
     const next = await runAction(() => markOpened(run))
-    if (next?.stage === 'opened') await beginSending(next, next.state.draft || '')
+    if (next?.stage === 'opened') await beginSending(next, next.state.draft || '', tab)
+    else tab?.close()
   }
 
   const recordResult = (result: 'sent' | 'failed' | 'read_no_reply', fallbackNote = '') => {
@@ -431,7 +450,7 @@ function App() {
                 <div className="send-options">
                   <div className="send-option primary">
                     <strong>现在就去发</strong>
-                    <p>文案会自动复制{selected.state.profile_url ? '并打开对方主页' : '，请在小红书里找到这家店'}，你粘贴发送后回来确认结果。</p>
+                    <p>文案会自动复制，并在新标签页{selected.state.profile_url ? '打开对方主页' : '打开小红书搜索这家店'}，你粘贴发送后回来确认结果。</p>
                     <button className="primary-button" type="button" disabled={busy || !draft.trim() || frozen} onClick={() => void sendNow()}><Send size={14} />通过并现在去发</button>
                   </div>
                   <div className="send-option">
@@ -452,7 +471,7 @@ function App() {
               </div>}
 
               {selected.stage === 'opened' && <div className="decision-content">
-                <div className={`status-card ${minutesSending !== null && minutesSending >= 2 ? 'warn' : 'info'}`}><Send size={18} /><div><strong>{minutesSending !== null && minutesSending >= 2 ? `已经过去 ${minutesSending} 分钟，发送成功了吗？` : '发送成功了吗？'}</strong><p>请在小红书里把文案发出去，然后回来点下面的按钮。{selected.state.profile_url ? '' : '这条任务没有主页地址，需要你在小红书里手动找到这家店。'}</p></div></div>
+                <div className={`status-card ${minutesSending !== null && minutesSending >= 2 ? 'warn' : 'info'}`}><Send size={18} /><div><strong>{minutesSending !== null && minutesSending >= 2 ? `已经过去 ${minutesSending} 分钟，发送成功了吗？` : '发送成功了吗？'}</strong><p>请在小红书里把文案发出去，然后回来点下面的按钮。</p><a className="link-button" href={shopUrl(selected)} target="_blank" rel="noreferrer">{selected.state.profile_url ? '再次打开对方主页' : '再次打开小红书搜索这家店'}</a></div></div>
                 {finalText}
                 <label>备注（可选）<input value={resultNote} onChange={(event) => setResultNote(event.target.value)} placeholder="例如：提示对方未关注，只能发一条" /></label>
                 <div className="button-row spread">
