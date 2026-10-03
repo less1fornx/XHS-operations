@@ -87,7 +87,8 @@ async def require_access_code(request: Request, call_next):
     client = request.client.host if request.client else ""
     if client not in LOOPBACK_HOSTS and request.method != "OPTIONS":
         supplied = request.headers.get("X-Access-Code") or request.query_params.get("code") or ""
-        if not ACCESS_CODE or not hmac.compare_digest(supplied, ACCESS_CODE):
+        # Compare as bytes: compare_digest rejects non-ASCII text.
+        if not ACCESS_CODE or not hmac.compare_digest(supplied.encode(), ACCESS_CODE.encode()):
             return JSONResponse(status_code=401, content={"detail": "access_code_required: 请输入访问码"})
     return await call_next(request)
 

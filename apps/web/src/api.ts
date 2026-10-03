@@ -7,6 +7,20 @@ export function accessCode(): string {
   return window.localStorage.getItem(CODE_KEY) || ''
 }
 
+let pendingPrompt: Promise<boolean> | null = null
+function askForCode(rejected: string): Promise<boolean> {
+  // A parallel request may already have stored a newer code: just retry with it.
+  if (accessCode() && accessCode() !== rejected) return Promise.resolve(true)
+  pendingPrompt ??= new Promise<boolean>((resolve) => {
+    const code = window.prompt(rejected ? '访问码不正确，请重新输入 6 位访问码' : '请输入访问码（启动服务的电脑终端里显示的 6 位数字）')
+    // Full-width digits from a Chinese keyboard are accepted too.
+    const cleaned = (code || '').replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xfee0)).replace(/\D/g, '')
+    if (cleaned) window.localStorage.setItem(CODE_KEY, cleaned)
+    resolve(Boolean(cleaned))
+  }).finally(() => { window.setTimeout(() => { pendingPrompt = null }, 0) })
+  return pendingPrompt
+}
+
 // Works on plain http pages too, where navigator.clipboard is unavailable.
 export async function copyToClipboard(text: string): Promise<boolean> {
   try {
@@ -44,13 +58,14 @@ export async function api<T>(path: string, options?: RequestInit): Promise<T> {
   })
   let response = await send()
   if (response.status === 401) {
-    // Another device on the network: ask once for the code shown when the service started.
-    const code = window.prompt('请输入访问码（启动服务的电脑终端里显示的 6 位数字）')
-    if (code) {
-      window.localStorage.setItem(CODE_KEY, code.trim())
-      response = await send()
+    // Another device on the network. The page fires several requests at once,
+    // so they all share one prompt instead of asking (and clearing) repeatedly.
+    const before = accessCode()
+    if (await askForCode(before)) response = await send()
+    if (response.status === 401) {
+      if (accessCode() && accessCode() !== before) window.localStorage.removeItem(CODE_KEY)
+      throw new Error('访问码不正确或未输入。请刷新页面，输入启动服务的电脑终端里显示的 6 位访问码。')
     }
-    if (response.status === 401) window.localStorage.removeItem(CODE_KEY)
   }
   const body = await response.json()
   if (!response.ok) {
