@@ -1,0 +1,148 @@
+// Whole-product walk-through in a real browser, against a fresh database and the mock model.
+// Run with scripts/e2e.sh. Each step is something the user does; a failing step names itself.
+// When the user finds a problem this did not catch, add the step that would have caught it.
+import { chromium } from 'playwright-core'
+import { mkdirSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const WEB = process.env.E2E_WEB_URL || 'http://127.0.0.1:5192'
+const SHOTS = process.env.E2E_SHOT_DIR || ''
+const fixture = (name) => join(dirname(fileURLToPath(import.meta.url)), 'fixtures', name)
+if (SHOTS) mkdirSync(SHOTS, { recursive: true })
+
+const results = []; const consoleErrors = []; const failedRequests = []
+const browser = await chromium.launch({ channel: 'chrome', headless: true })
+const context = await browser.newContext({ viewport: { width: 1440, height: 900 } })
+await context.route('**xiaohongshu.com/**', (route) => route.abort())   // never touch the real site
+const page = await context.newPage()
+page.on('console', (m) => m.type() === 'error' && consoleErrors.push(m.text()))
+page.on('pageerror', (e) => consoleErrors.push(String(e)))
+page.on('response', (r) => { if (r.status() >= 400 && r.url().includes('/api/')) failedRequests.push(`${r.status()} ${r.request().method()} ${new URL(r.url()).pathname}`) })
+
+let shot = 0
+async function step(name, action) {
+  try {
+    const detail = await action()
+    results.push({ name, ok: true, detail: detail ?? '' })
+  } catch (error) {
+    results.push({ name, ok: false, detail: String(error).split('\n')[0].slice(0, 160) })
+  }
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, `${String(++shot).padStart(2, '0')}.png`), fullPage: true }).catch(() => {})
+}
+const expect = (condition, message) => { if (!condition) throw new Error(message) }
+const nav = (label) => page.click(`.nav-item:has-text("${label}")`)
+
+// Text cut off by its box. A few places shorten on purpose (list hints, evidence snippets).
+const MAY_SHORTEN = ['.run-copy small', '.signal small', '.type-select', 'option', 'select']
+async function cutOffText(label) {
+  const found = await page.evaluate((allowed) => {
+    const out = []
+    for (const el of document.querySelectorAll('strong, small, span, h1, h2, p, button, label, em, li')) {
+      if (!el.textContent?.trim() || el.children.length > 2 || allowed.some((sel) => el.matches(sel) || el.closest(sel))) continue
+      const style = getComputedStyle(el)
+      const clips = ['hidden', 'clip'].includes(style.overflowX) || style.textOverflow === 'ellipsis'
+      if (clips && el.scrollWidth > el.clientWidth + 1 && el.clientWidth > 0) out.push(`${el.tagName.toLowerCase()}.${el.className || '-'}: ${el.textContent.trim().slice(0, 24)}`)
+      // one character per line: a label squeezed into a too-narrow column
+      if (el.children.length === 0 && el.textContent.trim().length >= 3 && el.clientWidth > 0 && el.clientWidth < 18 && el.clientHeight > 40) out.push(`squeezed ${el.tagName.toLowerCase()}: ${el.textContent.trim().slice(0, 12)}`)
+    }
+    return [...new Set(out)].slice(0, 6)
+  }, MAY_SHORTEN)
+  expect(found.length === 0, `${label} 有文字被截断或挤变形：${found.join(' | ')}`)
+}
+
+await page.goto(WEB)
+await step('打开页面，默认进入候选工作流', async () => { await page.waitForSelector('.tabs'); return await page.locator('h1').textContent() })
+
+await step('进度与反馈：六个环节都显示', async () => {
+  await nav('进度与反馈'); await page.waitForSelector('.stage-row')
+  expect(await page.locator('.stage-row').count() === 6, '环节数不是 6'); await cutOffText('进度页')
+})
+await step('提交一条意见，联系方式被隐去', async () => {
+  await page.fill('.feedback-form textarea', '检查用意见，电话13800001111'); await page.click('text=提交意见'); await page.waitForSelector('.note-item')
+  const text = await page.locator('.note-item p').first().textContent(); expect(!text.includes('13800001111'), '电话没有被隐去'); return text
+})
+
+await step('批量初筛：两家店，一家读不出来', async () => {
+  await nav('批量初筛'); const inputs = page.locator('.panel input[type=file]')
+  await inputs.nth(0).setInputFiles(fixture('shop-a.png')); await inputs.nth(1).setInputFiles(fixture('unreadable.png'))
+  await page.click('text=开始初筛'); await page.waitForSelector('.failure-box')
+  expect(await page.locator('.shop-card').count() === 1 && await page.locator('.failure-row').count() === 1, '应为读成 1 家、失败 1 家')
+})
+await step('失败的店在原批次里换图重试', async () => {
+  await page.locator('.failure-row input[type=file]').setInputFiles(fixture('shop-b.png'))
+  await page.waitForFunction(() => document.querySelectorAll('.shop-card').length === 2 && !document.querySelector('.failure-box'))
+})
+await step('初筛结果：填小红书号、标注分档，文字没有被截断', async () => {
+  const id = page.locator('.id-row input').first(); await id.fill('e2e_shop_01'); await id.blur(); await page.waitForTimeout(500)
+  await page.click('.shop-card >> nth=0 >> button:has-text("同意")'); await cutOffText('初筛结果')
+})
+await step('确认名单并生成草稿', async () => {
+  await page.click('text=确认名单并生成草稿'); await page.waitForSelector('text=草稿已生成', { timeout: 60000 })
+})
+await step('不刷新网页，从导航进入工作流就能看到新任务', async () => {
+  await nav('候选工作流'); await page.click('.tabs button:has-text("待处理")')
+  await page.waitForSelector('.run-row', { timeout: 5000 }); const count = await page.locator('.run-row').count()
+  expect(count >= 1, '待处理里没有新任务'); return `${count} 条`
+})
+await step('历史批次标题完整显示', async () => {
+  await nav('批量初筛'); if (await page.locator('text=返回上传').count()) await page.click('text=返回上传')
+  await page.waitForSelector('.batch-row'); const title = await page.locator('.batch-row .run-copy strong').first().textContent()
+  expect(/\d{4}年/.test(title) && title.includes('家店'), `标题不完整：${title}`); await cutOffText('历史批次'); return title
+})
+
+await step('审文案：写一句话让它重写', async () => {
+  await nav('候选工作流'); await page.click('.tabs button:has-text("待处理")')
+  await page.locator('.run-row', { hasText: '私信' }).first().click(); await page.waitForSelector('.draft-editor')
+  await page.fill('.rewrite-row input', '再短一点'); await page.click('.rewrite-row button')
+  await page.waitForFunction(() => document.querySelector('.draft-editor')?.value.includes('已按'), null, { timeout: 15000 })
+})
+await step('审文案：带违规内容的重写被拦下，原草稿保留', async () => {
+  const before = await page.inputValue('.draft-editor'); await page.fill('.rewrite-row input', '加上微信联系'); await page.click('.rewrite-row button')
+  await page.waitForSelector('.alert.error'); expect(await page.inputValue('.draft-editor') === before, '原草稿被改掉了'); await page.click('.alert.error .alert-close')
+  failedRequests.length = 0; consoleErrors.length = 0   // the 409 above is the expected refusal
+})
+await step('改草稿并选原因，通过并现在去发，文案被复制', async () => {
+  await page.fill('.draft-editor', (await page.inputValue('.draft-editor')) + ' 改'); await page.waitForSelector('.edit-reasons'); await page.click('.edit-reasons .tag >> nth=0')
+  await page.click('text=通过并现在去发'); await page.waitForSelector('text=发送成功了吗'); expect(await page.locator('.final-text p').count() === 1, '发送中看不到文案')
+})
+await step('确认已发送，进入等回复', async () => { await page.click('text=已发送成功'); await page.waitForSelector('.reply-panel') })
+await step('记录回复：不选阶段不能保存；选“不需要”自动带出阶段', async () => {
+  await page.fill('.reply-panel textarea', '不用了谢谢'); expect(await page.locator('button:has-text("保存回复")').isDisabled(), '没选阶段却能保存')
+  await page.click('.reply-panel .tag:has-text("不需要")'); expect(await page.locator('.reply-panel select').inputValue() === 'replied_no_intent', '阶段没有自动带出')
+  await page.click('button:has-text("保存回复")'); await page.waitForSelector('.badge:has-text("已回复")')
+})
+
+await step('手动添加一家店，模型给出建议', async () => {
+  await page.click('.tabs button:has-text("待处理")'); await page.click('text=手动添加')
+  await page.fill('input[placeholder^="例如：上海"]', '手动添加的店'); await page.fill('textarea[placeholder^="粘贴对方"]', '法兰绒双排扣西装上新')
+  await page.click('text=开始评选'); await page.waitForSelector('.choice-group')
+})
+await step('不联系必须先说原因', async () => {
+  await page.click('.choice.danger'); await page.waitForSelector('.end-panel')
+  expect(await page.locator('text=确认不联系，结束任务').isDisabled(), '没选原因却能结束')
+  await page.click('.end-panel .tag >> nth=0'); await page.click('text=确认不联系，结束任务'); await page.waitForSelector('text=任务已结束')
+})
+await step('原因汇总里出现刚才的原因', async () => {
+  await nav('进度与反馈'); await page.waitForSelector('.reason-row')
+  const text = (await page.locator('.reason-columns').innerText()).replace(/\s+/g, ' ')
+  expect(text.includes('不是西装定制店'), '选路线时填的不联系原因没有进汇总'); expect(text.includes('太长'), '审文案时选的修改原因没有进汇总'); return text.slice(0, 80)
+})
+await step('风险记录页能打开', async () => { await nav('风险记录'); await page.waitForSelector('.risk-list') })
+
+await step('手机宽度：导航有文字，各页文字没有被截断或挤成竖排', async () => {
+  await page.setViewportSize({ width: 390, height: 800 })
+  const labels = await page.locator('.nav-item').evaluateAll((items) => items.map((el) => getComputedStyle(el).fontSize))
+  expect(labels.every((size) => parseFloat(size) >= 10), '手机上导航没有文字')
+  for (const label of ['进度与反馈', '批量初筛', '候选工作流']) { await nav(label); await page.waitForTimeout(300); await cutOffText(`手机·${label}`) }
+  await page.click('.tabs button:has-text("全部")'); await page.locator('.run-row').first().click(); await page.waitForTimeout(300); await cutOffText('手机·任务详情')
+})
+
+await step('全程没有页面报错', async () => { expect(consoleErrors.length === 0, consoleErrors.join(' | ')) })
+await step('全程没有意外失败的接口请求', async () => { expect(failedRequests.length === 0, failedRequests.join(' | ')) })
+await browser.close()
+
+const failed = results.filter((r) => !r.ok)
+for (const r of results) console.log(`${r.ok ? '通过' : '失败'}  ${r.name}${r.detail ? `  →  ${r.detail}` : ''}`)
+console.log(`\n共 ${results.length} 步，通过 ${results.length - failed.length}，失败 ${failed.length}${SHOTS ? `。截图在 ${SHOTS}` : ''}`)
+process.exit(failed.length ? 1 : 0)

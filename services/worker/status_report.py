@@ -70,14 +70,17 @@ def collect(db_path: Path = DEFAULT_DB, eval_cases: Path = EVAL_CASES) -> dict[s
         )
         no_reply = one("select count(*) from outreach_outcomes where stage='no_reply'")
         model_calls = dict(conn.execute("select status, count(*) from model_invocations group by 1"))
+        # Read reasons where they are always written: the audit trail for ended tasks
+        # (written at every stage) and the task state for edits (review-time and later).
         end_reasons: dict[str, int] = {}
+        for (raw,) in conn.execute("select after_json from audit_logs where action='run_ended_by_human'"):
+            for key in (json.loads(raw or "{}").get("reasons") or []):
+                end_reasons[key] = end_reasons.get(key, 0) + 1
         edit_reasons: dict[str, int] = {}
-        for review_type, raw in conn.execute(
-            "select review_type, reason from human_reviews where review_type in ('end','content_edit') and reason like '{%'"
-        ):
-            for key in json.loads(raw).get("reasons") or []:
-                bucket = end_reasons if review_type == "end" else edit_reasons
-                bucket[key] = bucket.get(key, 0) + 1
+        for (raw,) in conn.execute("select payload_json from run_snapshots where payload_json like '%draft_edits%'"):
+            for edit in (json.loads(raw).get("state") or {}).get("draft_edits") or []:
+                for key in edit.get("reasons") or []:
+                    edit_reasons[key] = edit_reasons.get(key, 0) + 1
         has_notes = one("select count(*) from sqlite_master where type='table' and name='feedback_notes'")
         open_notes = [
             {"area": area, "text": text, "created_at": created_at}

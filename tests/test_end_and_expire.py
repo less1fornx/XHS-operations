@@ -94,3 +94,25 @@ def test_ending_a_run_keeps_the_reasons(tmp_path) -> None:
     with Session(store.engine) as session:
         audit = session.exec(select(AuditLog).where(AuditLog.action == "run_ended_by_human")).one()
     assert json.loads(audit.after_json)["reasons"] == ["chain_hq"]
+
+
+def test_reason_summary_counts_route_stage_endings_and_review_time_edits(tmp_path) -> None:
+    # Found by the browser walk-through 2026-10-05: reasons given at the route stage
+    # (before any task row exists) and edits made during review were missing from the summary.
+    from services.worker.status_report import collect
+
+    store = make_store(tmp_path)
+    save_run(store, "run-1", "route_review")
+    store.end_run("run-1", "不联系", reasons=["not_target"])
+    save_run(store, "run-2", "content_review")
+    with Session(store.engine) as session:
+        snapshot = session.get(RunSnapshot, "run-2")
+        payload = json.loads(snapshot.payload_json)
+        payload["state"]["draft_edits"] = [{"reasons": ["too_long", "too_generic"]}]
+        snapshot.payload_json = json.dumps(payload, ensure_ascii=False)
+        session.commit()
+
+    stats = collect(tmp_path / "test.db", tmp_path / "no-cases.json")
+
+    assert stats["end_reasons"] == {"not_target": 1}
+    assert stats["edit_reasons"] == {"too_long": 1, "too_generic": 1}
