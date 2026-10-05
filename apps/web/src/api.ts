@@ -52,9 +52,14 @@ export async function api<T>(path: string, options?: RequestInit): Promise<T> {
   // dropped Content-Type, so the API rejected the JSON body with 422.
   // FormData uploads set their own multipart Content-Type with a boundary.
   const isForm = options?.body instanceof FormData
+  // fetch only rejects when the request never got an answer: the local backend is
+  // stopped, restarting, or unreachable. The browser's own text ("Failed to fetch")
+  // says none of that, and it has nothing to do with Xiaohongshu.
   const send = () => fetch(`${API}${path}`, {
     ...options,
     headers: { ...(isForm ? {} : { 'Content-Type': 'application/json' }), ...(accessCode() ? { 'X-Access-Code': accessCode() } : {}), ...(options?.headers || {}) },
+  }).catch(() => {
+    throw new Error(`连不上本机的后台服务（${API}）。这不是小红书的问题：请看启动 dev.sh 的终端窗口是否还在运行、有没有报错，然后刷新页面再试。刚才这一步没有保存。`)
   })
   let response = await send()
   if (response.status === 401) {
