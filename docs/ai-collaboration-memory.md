@@ -191,7 +191,7 @@ React/Vite Web
 - Phase 2A：完成基础骨架，包括结构化输入输出、版本化 Prompt、Qwen/Mock Provider、证据引用校验和固定案例评测。
 - Phase 2C：截图批量初筛已跑通（读图 → 规则分档 → 批量审核 → 自动起草），规则 v0。
 - Phase 2B：主链路已端到端跑通（录入 → 模型建议 → 人工路线审核 → 文案审核 → 加入提醒队列），模型调用已持久化。尚未完成结果反馈窗口、周期分析和真实样本评测集。
-- 当前自动测试：56 项通过。
+- 当前自动测试：68 项通过。
 - 当前 Mock 评测：正式集 6/6 通过，其中 3 个由 Policy Gate 直接拒绝、未调用 Provider。该结果只证明流程和测试规则可运行，不代表 Qwen 的真实准确率。
 - Qwen 已于 2026-10-02 完成首次真实评测：正式集 6/6 通过，但其中只有 3 个是真实模型调用，样本过少，不能视为准确率。
 
@@ -202,9 +202,10 @@ React/Vite Web
 - 生成入口（先 Policy Gate，后模型调用）：`packages/agent_core/pipeline.py`
 - Prompt 构建：`packages/agent_core/prompting.py`
 - 评测：`packages/agent_core/evaluation.py`
-- 当前 Prompt：`prompts/lead_outreach/v4/system.md`（v1 至 v3 保留）；读图 Prompt：`prompts/shop_extraction/v1/system.md`
-- 产品事实：`config/product_facts.v2.json`（v1 保留）
-- 工作流图：`labs/phase0-langgraph/src/phase0_graph/lead_workflow.py`
+- 当前 Prompt：`prompts/lead_outreach/v7/system.md`（v1 至 v6 保留）；读图 Prompt：`prompts/shop_extraction/v1/system.md`
+- 产品事实：`config/product_facts.v3.json`（v1、v2 保留）
+- 工作流图：`packages/workflows/lead_workflow.py`、`packages/workflows/screening_workflow.py`（2026-10-05 从 `labs/` 和 `services/worker/` 移入，旧路径保留转接文件）
+- 接口：`services/api/app/routers/`；公共流转逻辑：`services/api/app/flows/`；接线：`services/api/app/runtime.py`；数据：`services/api/app/storage/`（对外仍是单一的 `RunStore`）
 - 模型输入构造与落库：`services/worker/lead_generation.py`
 - 固定案例：`evals/phase2_cases.v1.json`
 - Phase 2 学习文档：`docs/phase2-agent-design-learning.md`
@@ -557,6 +558,21 @@ Claude 的立场：不实现自动发送。理由不只是账号风险：自动�
 **用户最终决定**：（待填写）
 
 ## 8. 最近交接记录
+
+### 2026-10-05｜Claude｜后台代码按业务拆分（纯搬家，行为不变）
+
+- 目的：用户决定现在拆分两个大文件，避免后续修改代价继续增加。方案见 `project-review/代码分块方案.md`。
+- 修改（三次提交 `c9c7f66`、`58420e1`、`d3f7e9b`）：
+  - `services/api/app/storage.py` → `storage/` 包：`base.py`、`runs.py`、`leads.py`、`quota.py`、`outcomes.py`、`batches.py`、`feedback.py`。`RunStore` 由六个 mixin 组合而成，调用方式和导入路径不变。
+  - `services/api/app/main.py` → `main.py`（建应用、装安全检查、接入四组接口）、`runtime.py`（数据库、模型、两张流程图的唯一构建处）、`security.py`（`install(app)`：访问码、错误日志、跨域）、`routers/{runs,batches,replies,status}.py`、`flows/{run_flow,batch_flow}.py`。依赖方向单向：main → routers → flows → runtime。
+  - 流程图移到 `packages/workflows/lead_workflow.py` 和 `screening_workflow.py`；`labs/phase0-langgraph/src/phase0_graph/lead_workflow.py` 与 `services/worker/screening_graph.py` 保留为转接文件。`runtime.py` 去掉了往 `sys.path` 加实验目录的那段；`scripts/dev.sh` 启动后台改用 `PYTHONPATH=.`。
+  - `tests/test_api_import.py` 改为清掉全部 `services.api.app.*` 模块后再加载。
+- 没有改动：任何业务逻辑、接口地址、请求和返回格式、`RunStore` 方法名、流程图节点名、数据库结构。
+- 验证：拆分前后 47 个存储方法、60 个接口层定义的源代码逐字相同（接口装饰器 `@app` 改为 `@router` 除外）；新旧应用的 31 个 OpenAPI 操作、数据格式和中间件顺序一致；`ruff` F821、F401、F811 无报告；`pytest` 68 passed（`PYTHONPATH=.` 即可）；无头浏览器在真实数据副本和 Mock 上走完 16 个检查点（进度页、提交意见、搬家前保存的待审核批次从断点继续、新批次读图与换图重试、指令重写、改稿并发送、记录回复、带原因结束、手动添加并改路线、风险页、原因汇总），无控制台报错、无失败请求、后台错误日志为空；`services.worker.worker --once` 正常退出。
+- 说明：FastAPI 0.142 把接入的路由组包成 `_IncludedRouter`，直接遍历 `app.routes` 看不到里面的接口；比对接口要用 `app.openapi()`。
+- 回归中发现但未修（拆分期间不改行为，留待之后）：审文案时的修改原因存在任务状态的 `draft_edits` 里，而原因汇总只统计 `human_reviews` 中 `content_edit` 类型（通过后的修改），所以审文案时选的修改原因没有进入汇总。
+- 未做：页面 `App.tsx` 拆分；`README.md` 中的命令仍带旧路径（仍可用；该文件有 Codex 未提交的改动，未触碰）。
+- 用户需要：重启 `./scripts/dev.sh`。
 
 ### 2026-10-05｜Claude｜人工指令重写和自动检查重写共用一条通道（规则 v7）；代码分块方案
 

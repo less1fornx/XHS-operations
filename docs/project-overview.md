@@ -69,12 +69,12 @@
 | 层 | 职责 | 主要代码 |
 |---|---|---|
 | 页面 | 上传、审核、发送确认、记录回复 | `apps/web/src/App.tsx`、`Screening.tsx`、`Reply.tsx` |
-| API | 接收操作、校验状态、调用编排、保存结果 | `services/api/app/main.py` |
+| API | 接收操作、校验状态、调用编排、保存结果 | `services/api/app/routers/`（四组接口）、`flows/`（公共流转逻辑）、`runtime.py`（接线）、`security.py` |
 | 规则 | 不依赖模型的确定性判断 | `packages/agent_core/screening.py`、`outcomes.py`、`contracts.py` |
-| 编排 | 步骤顺序、并行、人工停点 | `services/worker/screening_graph.py`、`labs/phase0-langgraph/src/phase0_graph/lead_workflow.py` |
+| 编排 | 步骤顺序、并行、人工停点 | `packages/workflows/lead_workflow.py`、`packages/workflows/screening_workflow.py` |
 | 上下文 | 把店铺信息和产品事实整理成模型输入 | `services/worker/lead_generation.py` |
 | 模型 | 调用 Qwen，校验输出格式 | `packages/agent_core/providers.py`、`vision.py`、`pipeline.py` |
-| 数据 | 表结构、读写、迁移 | `services/api/app/models.py`、`storage.py`、`alembic/` |
+| 数据 | 表结构、读写、迁移 | `services/api/app/models.py`、`storage/`（按业务分 6 个文件）、`alembic/` |
 
 ## 5. 两条编排流程
 
