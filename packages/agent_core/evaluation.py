@@ -16,6 +16,9 @@ class ExpectedResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     route: str
+    # When more than one route is a fine answer (user 2026-10-05: DM or comment both
+    # serve the goal for a relevant shop). Empty means only `route` counts.
+    acceptable_routes: list[str] = []
     must_include: list[str] = Field(default_factory=list)
     must_not_include: list[str] = Field(default_factory=list)
 
@@ -78,7 +81,7 @@ def run_evaluation(
             item for item in case.expected.must_not_include if item.casefold() in normalized_draft
         ]
         invalid_refs = validate_evidence_refs(case.input, output)
-        route_correct = output.route == case.expected.route
+        route_correct = output.route in (case.expected.acceptable_routes or [case.expected.route])
         passed = route_correct and not missing_required and not forbidden_hits and not invalid_refs
         results.append(
             {

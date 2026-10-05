@@ -18,7 +18,7 @@ from services.api.app.storage import RunStore
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-PRODUCT_FACTS_PATH = PROJECT_ROOT / "config" / "product_facts.v2.json"
+PRODUCT_FACTS_PATH = PROJECT_ROOT / "config" / "product_facts.v3.json"
 
 CONTACT_MODE_BY_BASIS = {
     "cold_outreach": "cold",
