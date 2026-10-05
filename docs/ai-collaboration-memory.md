@@ -558,6 +558,21 @@ Claude 的立场：不实现自动发送。理由不只是账号风险：自动�
 
 ## 8. 最近交接记录
 
+### 2026-10-05｜Claude｜人工指令重写和自动检查重写共用一条通道（规则 v7）；代码分块方案
+
+- 用户决定：参考调研清单按 C → D → A → B 进行；并要求 Claude 边做边说明在做什么、为什么这样设计（用户自述缺少架构思路）。之后用户提出现在就拆分两个大文件，要求先出方案。
+- 设计：C（审核时写一句话重写）和 D（检查不过自动重写）是同一个机制的两个来源，只做一条通道：模型输入新增 `previous_draft`、`revision_request`（人写的）、`revision_issues`（程序查出的）。
+- 修改：
+  - `packages/agent_core/contracts.py`：`LeadAgentInput` 新增上述三个字段。`prompts/lead_outreach/v7/system.md` 新增“修改已有草稿”一节：人的要求优先于写法规则，但不能突破证据边界和硬性限制；程序指出的问题必须逐条解决；只改被指出的地方。`PROMPT_VERSION=lead-outreach-v7`。
+  - 流程图 `lead_workflow.py`：`draft_message → check_draft →（redraft → check_draft）* → policy_gate`。`check_draft` 只判断不调用模型；`route_after_check` 在草稿无问题或已重写 `MAX_REDRAFTS=2` 次时放行；`redraft` 失败时保留原草稿。检查函数由外部注入（`build_graph(draft_checker=...)`），不传时流程与原来相同。新增状态 `draft_issues`、`redraft_count`、`redraft_log`。原有节点名未变，进行中的任务不受影响。
+  - `services/api/app/main.py`：`check_first_message()` 只检查首次陌生私信；`POST /api/runs/{id}/regenerate` 接受可选的 `instruction`，保存前清除联系方式，新草稿仍要过策略检查。`RunStore.replace_model_draft()` 把指令存入任务状态的 `draft_instructions` 和 `human_reviews`（`review_type=instruction`）。
+  - 页面：审文案处新增指令输入框；显示自动重写次数和仍未解决的问题。
+  - 新增 `tests/test_api_import.py`：加载整个后台并检查流程图节点。起因是本次接线时把检查函数放在了使用它的语句之后，单元测试没有发现。
+- 验证：`pytest` 68 passed；前端构建通过；真实 Qwen 固定评测 6/6；无头浏览器在副本和 Mock 上验证了指令重写、被策略拦截时保留原草稿、指令入库。
+- 真实 Qwen 在 5 家真实店铺上跑循环（只读真实数据库，结果在 `evals/redraft_loop_v7_20261005.json`）：首稿 5 条各有 1 个问题（都是固定起句“想请教下”），各重写 1 次后检查全部通过；平均 98 字。一条人工指令“再短一点，不要评价对方，直接说你看到了什么”得到了符合要求的结果。
+- 局限：程序检查只能拦住已经写进规则的模式。终稿里仍有检查不到的问题：新的套话“很有辨识度”出现 2 次；“对内搭的质感与版型匹配度有特定要求”是换了说法的替对方下结论；Moon 一条仍有“很考验……把控”“功底”。这类问题要靠清单 A（验收条目加模型裁判）。
+- 代码分块：`project-review/代码分块方案.md`。按五块业务（任务、批次、回复、店铺与管控、进度与意见）拆 `main.py` 和 `storage.py`，数据层对外仍保留单一的 `RunStore`；两张流程图移到 `packages/workflows/`；只搬家不改行为，一块一提交。**未实施，等用户确认。**
+
 ### 2026-10-05｜Claude｜起草规则 v6；更正两条回复记录；读完三个参考项目并整理
 
 - 用户答复：同意更正两条回复记录；场景描述可以加但必须严谨，非必要不加；v5 方向对，细节还要优化；三个参考项目都读，整理到 `project-review/`。
