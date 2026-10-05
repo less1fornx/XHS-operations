@@ -236,3 +236,16 @@ def test_overlong_lists_are_trimmed_not_rejected() -> None:
 
     assert extraction.store_mentions == [f"门店{i}" for i in range(10)]
     assert len(extraction.bio_text) == 2000
+
+
+def test_missing_fields_become_blank_and_are_flagged() -> None:
+    # User decision 2026-10-05: a field the model left out is recorded as empty, not a failure.
+    extraction = ShopExtraction.model_validate({
+        "shop_name": "某西装定制", "account_kind": "personal", "shop_type": "suit_custom",
+        "fabric_mentions": None, "knitwear_present": None,
+    })
+
+    assert extraction.fabric_mentions == [] and extraction.bio_text == ""
+    assert extraction.knitwear_present == "unknown"
+    assert "面料（模型没有返回）" in extraction.unclear_fields
+    assert "店铺名称（模型没有返回）" not in extraction.unclear_fields

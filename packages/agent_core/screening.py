@@ -46,6 +46,37 @@ def trim_model_output(model: type[StrictModel], data: object) -> object:
     return trimmed
 
 
+# What a field becomes when the model leaves it out or returns null (user decision
+# 2026-10-05: record it as empty and flag it, do not fail the whole shop).
+_BLANK_VALUES: dict[str, object] = {
+    "shop_name": "", "bio_text": "", "account_kind": "unknown", "shop_type": "other",
+    "knitwear_present": "unknown", "price_mentions": [], "fabric_mentions": [],
+    "high_end_mentions": [], "store_mentions": [], "recent_post_dates": [],
+    "pinned_post_dates": [], "content_topics": [], "unclear_fields": [],
+}
+_FIELD_NAMES_ZH = {
+    "shop_name": "店铺名称", "bio_text": "简介", "account_kind": "账号类型", "shop_type": "店铺类型",
+    "knitwear_present": "是否已有内搭", "price_mentions": "价格", "fabric_mentions": "面料",
+    "high_end_mentions": "高端用语", "store_mentions": "门店", "recent_post_dates": "笔记日期",
+    "content_topics": "笔记标题",
+}
+
+
+def fill_missing_fields(data: object) -> object:
+    """Replace absent or null fields with an empty value and list them in unclear_fields."""
+    if not isinstance(data, dict):
+        return data
+    filled = dict(data)
+    missing = [name for name, blank in _BLANK_VALUES.items() if filled.get(name) is None]
+    for name in missing:
+        blank = _BLANK_VALUES[name]
+        filled[name] = list(blank) if isinstance(blank, list) else blank
+    flagged = [_FIELD_NAMES_ZH[name] + "（模型没有返回）" for name in missing if name in _FIELD_NAMES_ZH]
+    if flagged:
+        filled["unclear_fields"] = [*filled["unclear_fields"], *flagged]
+    return filled
+
+
 class ShopExtraction(StrictModel):
     """What the vision model saw. Lists hold verbatim screenshot text, not opinions."""
 
@@ -81,7 +112,7 @@ class ShopExtraction(StrictModel):
     @model_validator(mode="before")
     @classmethod
     def trim_to_limits(cls, data: object) -> object:
-        return trim_model_output(cls, data)
+        return trim_model_output(cls, fill_missing_fields(data))
 
 
 class NotShopPageError(Exception):

@@ -60,7 +60,7 @@ from packages.agent_core.outcomes import (  # noqa: E402
 from packages.agent_core.providers import ProviderResponseError  # noqa: E402
 from packages.agent_core.vision import read_reply, shop_extractor_from_env  # noqa: E402
 from services.worker.screening import UPLOAD_ROOT, make_read_shop, purge_old_uploads  # noqa: E402
-from services.worker.screening_graph import build_batch_graph, rank_results  # noqa: E402
+from services.worker.screening_graph import build_batch_graph, classify_error, rank_results  # noqa: E402
 from services.worker.status_report import FEEDBACK_AREAS, collect as collect_status, stage_rows  # noqa: E402
 
 
@@ -126,8 +126,9 @@ graph = build_graph(
 )
 graph_lock = Lock()
 shop_extractor = shop_extractor_from_env()
+read_shop = make_read_shop(store, shop_extractor)
 batch_graph = build_batch_graph(
-    make_read_shop(store, shop_extractor),
+    read_shop,
     lambda name, xhs_id="": store.is_do_not_contact(name, None, xhs_id),
     today_in_shanghai,
     checkpointer=checkpointer,
@@ -782,6 +783,69 @@ def correct_batch_shop(batch_id: str, shop_key: str, payload: ShopCorrection) ->
              "after": value, "at": datetime.now().isoformat()},
         ]
         target["extraction"][field] = value
+    current["ranked"] = rank_results(
+        current["results"], today_in_shanghai(),
+        lambda name, xhs_id="": store.is_do_not_contact(name, None, xhs_id),
+        current["dm_slots"], current["comment_slots"],
+    )
+    store.save_batch(batch_id, current["status"], current)
+    return current
+
+
+@app.post("/api/batches/{batch_id}/shops/{shop_key}/retry")
+async def retry_batch_shop(batch_id: str, shop_key: str, request: Request) -> dict[str, Any]:
+    """Read one failed shop again inside the same batch, optionally with replacement screenshots.
+
+    User request 2026-10-05: a failed shop must not force a whole new batch and a
+    second upload of every picture.
+    """
+    current = store.get_batch(batch_id)
+    if not current:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    if current["status"] != "awaiting_review":
+        raise HTTPException(status_code=409, detail="只有待审核的批次可以重新读取")
+    target = next((r for r in current["results"] if r["shop_key"] == shop_key), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="找不到这家店")
+
+    form = await request.form() if request.headers.get("content-type", "").startswith("multipart/") else None
+    files = [item for item in form.getlist("images") if isinstance(item, UploadFile)] if form else []
+    if len(files) > MAX_IMAGES_PER_SHOP:
+        raise HTTPException(status_code=409, detail=f"too_many_images: 每家店最多 {MAX_IMAGES_PER_SHOP} 张截图")
+    if files:
+        folder = UPLOAD_ROOT / batch_id
+        folder.mkdir(parents=True, exist_ok=True)
+        new_images: list[tuple[str, bytes]] = []
+        for number, upload in enumerate(files):
+            suffix = ALLOWED_IMAGE_TYPES.get(upload.content_type or "")
+            if suffix is None:
+                raise HTTPException(status_code=409, detail=f"invalid_image: {upload.filename} 不是 JPG、PNG 或 WebP 图片")
+            data = await upload.read()
+            if len(data) > MAX_IMAGE_BYTES:
+                raise HTTPException(status_code=409, detail=f"image_too_large: {upload.filename} 超过 10MB")
+            new_images.append((f"{shop_key}_r{len(current.get('retries', []))}_{number}{suffix}", data))
+        paths = []
+        for name, data in new_images:
+            (folder / name).write_bytes(data)
+            paths.append(str(folder / name))
+        target["image_paths"] = paths
+    elif not all(Path(path).is_file() for path in target["image_paths"]):
+        raise HTTPException(status_code=409, detail="原图已按 10 天保存期限删除，请重新选择截图")
+
+    shop = {"batch_id": batch_id, "shop_key": shop_key, "image_paths": target["image_paths"]}
+    try:
+        extraction = read_shop(shop)
+    except Exception as exc:  # still failing: keep the shop in the batch with the new reason
+        target.update(status="failed", error=str(exc), error_kind=classify_error(exc))
+        target.pop("extraction", None)
+    else:
+        target.update(status="read", extraction=extraction.model_dump())
+        target.pop("error", None)
+        target.pop("error_kind", None)
+    current["retries"] = [
+        *current.get("retries", []),
+        {"shop_key": shop_key, "new_images": bool(files), "status": target["status"], "at": datetime.now().isoformat()},
+    ]
     current["ranked"] = rank_results(
         current["results"], today_in_shanghai(),
         lambda name, xhs_id="": store.is_do_not_contact(name, None, xhs_id),

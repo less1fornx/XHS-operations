@@ -212,3 +212,6 @@ label { font-size:12px; }input,textarea,select { font-size:14px; }
   .detail-panel { padding:16px 14px; }
   .button-row.spread,.reply-panel .button-row { flex-wrap:wrap; }
 }
+.failure-row { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; padding:8px 0; border-top:1px dashed #e2aaa7; }
+.failure-row p { margin:0; flex:1 1 320px; }.failure-row .button-row { margin:0; }
+.file-button { cursor:pointer; }

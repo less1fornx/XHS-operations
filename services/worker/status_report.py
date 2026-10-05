@@ -128,7 +128,7 @@ def stage_rows(stats: dict[str, Any]) -> list[dict[str, Any]]:
          "how": "批量初筛的结果卡片上：核对小红书号，认错的店铺类型直接改。", "view": "screening",
          "detail": f"读成 {read['shops_read']} 家，失败 {read['shops_failed']} 家，你改正 {read['corrected']} 次",
          **rated("xhs_id_rate", read["xhs_id_rate"], read["shops_read"])},
-        {"key": "tier", "label": "分档", "measure": "你同意系统分档的比例",
+        {"key": "tier", "label": "分档", "measure": "你同意系统分档的比例（参考项，现阶段重点是起草）",
          "how": "批量初筛的结果卡片上：每家店点“同意”或“不同意”，不同意时写一句理由。", "view": "screening",
          "detail": f"同意 {tier['agree']} 家，不同意 {tier['disagree']} 家",
          **rated("tier_agree_rate", tier["tier_agree_rate"], tier["marked"])},

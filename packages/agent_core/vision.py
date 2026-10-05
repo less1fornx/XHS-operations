@@ -115,7 +115,8 @@ class QwenShopExtractor:
 
 
 class MockShopExtractor:
-    """Deterministic stand-in. A file name containing "fail" simulates a read failure."""
+    """Deterministic stand-in. A file name containing "fail", or content starting with
+    b"FAIL" (uploads are renamed on save), simulates a read failure."""
 
     provider_name = "mock"
     model_name = "mock-vision-v1"
@@ -125,7 +126,7 @@ class MockShopExtractor:
 
     def extract(self, images: list[Image]) -> ExtractionResult:
         first = Path(images[0][0]).stem
-        if any("fail" in name for name, _ in images):
+        if any("fail" in name or data.startswith(b"FAIL") for name, data in images):
             raise ProviderResponseError("截图识别失败: 模拟的识别错误")
         extraction = self.fixtures.get(first) or ShopExtraction(
             shop_name=first,

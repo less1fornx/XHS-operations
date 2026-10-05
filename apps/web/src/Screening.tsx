@@ -144,6 +144,27 @@ export default function ScreeningView({ onOpenWorkflow }: { onOpenWorkflow: () =
 
   // Human correction of a misread shop type; the server re-tiers the whole batch.
   const correctType = (key: string, shopType: string) => correct(key, { shop_type: shopType })
+  // A failed shop is read again inside this batch; picking files replaces its screenshots.
+  const retryShop = async (key: string, files?: FileList | null) => {
+    if (!batch) return
+    setBusy(true)
+    setError('')
+    try {
+      const form = new FormData()
+      for (const file of Array.from(files || [])) form.append('images', file)
+      const next = await api<Batch>(`/api/batches/${batch.id}/shops/${key}/retry`, files?.length ? { method: 'POST', body: form } : { method: 'POST' })
+      setBatch(next)
+      setDecisions((current) => {
+        const merged: Record<string, Decision> = {}
+        for (const item of next.ranked) merged[item.shop_key] = current[item.shop_key] ?? { route: item.screening?.suggested_route || 'none', tier_feedback: null, note: '' }
+        return merged
+      })
+    } catch (cause) {
+      setError((cause as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
   const correct = async (key: string, change: { shop_type?: string; xhs_id?: string }) => {
     if (!batch) return
     setBusy(true)
@@ -212,8 +233,14 @@ export default function ScreeningView({ onOpenWorkflow }: { onOpenWorkflow: () =
         </p>
 
         {failed.length > 0 && <div className="failure-box">
-          <strong>以下店铺没有读出来，已跳过，不影响其他店：</strong>
-          {failed.map((item) => <p key={item.shop_key}>{item.shop_key.replace('shop_', '店铺 ').replace(/\d+$/, (n) => String(Number(n) + 1))}：{item.error_kind === 'not_shop_page' ? item.error : item.error_kind === 'system' ? '服务暂时出错（已自动重试一次），可以稍后重新上传这一家' : '模型返回的结果格式不对，没能读出店铺信息，可以重新上传这一家再试一次'}{item.error_kind !== 'not_shop_page' && <small>{item.error}</small>}</p>)}
+          <strong>以下店铺没有读出来。可以直接在这里重试，或换一组截图，不用重新建一批：</strong>
+          {failed.map((item) => <div className="failure-row" key={item.shop_key}>
+            <p>{item.shop_key.replace('shop_', '店铺 ').replace(/\d+$/, (n) => String(Number(n) + 1))}：{item.error_kind === 'not_shop_page' ? item.error : item.error_kind === 'system' ? '服务暂时出错（已自动重试一次）' : '模型返回的内容没法使用'}{item.error_kind !== 'not_shop_page' && <small>{item.error}</small>}</p>
+            {batch.status === 'awaiting_review' && <div className="button-row">
+              {item.error_kind !== 'not_shop_page' && <button className="secondary-button small" type="button" disabled={busy} onClick={() => void retryShop(item.shop_key)}>{busy ? '读取中…' : '用原图重试'}</button>}
+              <label className="secondary-button small file-button">换截图重试<input type="file" accept="image/jpeg,image/png,image/webp" multiple hidden disabled={busy} onChange={(event) => { void retryShop(item.shop_key, event.target.files); event.target.value = '' }} /></label>
+            </div>}
+          </div>)}
         </div>}
 
         <div className="shop-cards">
