@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   Check,
@@ -206,6 +206,23 @@ function App() {
   useEffect(() => {
     refresh().catch((cause: Error) => setError(cause.message))
   }, [])
+
+  // Tasks also appear from outside this page (batch screening drafts in the
+  // background, timeouts end tasks), so the list must not wait for a manual reload.
+  const refreshRef = useRef(refresh)
+  refreshRef.current = refresh
+  const busyRef = useRef(false)
+  busyRef.current = busy
+  useEffect(() => {
+    const quiet = () => { if (!busyRef.current && document.visibilityState === 'visible') refreshRef.current().catch(() => undefined) }
+    const timer = window.setInterval(quiet, 10000)
+    window.addEventListener('focus', quiet)
+    document.addEventListener('visibilitychange', quiet)
+    return () => { window.clearInterval(timer); window.removeEventListener('focus', quiet); document.removeEventListener('visibilitychange', quiet) }
+  }, [])
+  useEffect(() => {
+    if (view === 'workflow') refreshRef.current().catch(() => undefined)
+  }, [view])
 
   useEffect(() => {
     setDraft(selected?.state.draft || '')
