@@ -77,7 +77,7 @@ def test_accepting_model_route_uses_model_draft(tmp_path) -> None:
     second = graph.invoke(Command(resume={"requested_channel": "dm"}), config("run-accept"))
 
     assert second["draft"] == first["model_draft"]
-    assert "一件起订" in second["draft"]
+    assert "内搭" in second["draft"]
     assert second["__interrupt__"][0].value["type"] == "content_review"
 
 
@@ -132,3 +132,12 @@ def test_prior_conversation_maps_to_warm_contact() -> None:
     assert agent_input.contact_mode == "warm"
     assert agent_input.prior_outcome == "replied"
     assert [item.evidence_id for item in agent_input.evidence] == ["e1", "e2", "e3"]
+
+
+def test_old_runs_get_audience_from_the_screening_snapshot() -> None:
+    from services.worker.lead_generation import build_agent_input
+
+    state = {"shop_name": "店", "video_text": "内容", "screening_snapshot": {"account_kind": "personal"}}
+    assert build_agent_input(state, ["事实"]).audience == "personal_shop"
+    assert build_agent_input({**state, "audience": "store_account"}, ["事实"]).audience == "store_account"
+    assert build_agent_input({"shop_name": "店", "video_text": "内容"}, ["事实"]).audience == "unknown"

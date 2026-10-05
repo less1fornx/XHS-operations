@@ -63,6 +63,11 @@ def collect(db_path: Path = DEFAULT_DB, eval_cases: Path = EVAL_CASES) -> dict[s
             "select count(*) from human_reviews where review_type='platform_result' and decision='confirm'"
         )
         replied = one("select count(*) from outreach_outcomes where reply_timing in ('normal','late')")
+        declined = one(
+            "select count(*) from outreach_outcomes where reply_timing in ('normal','late') and "
+            "(ask_tags_json like '%not_needed%' or ask_tags_json like '%has_supplier%' "
+            "or stage in ('replied_no_intent','lost'))"
+        )
         no_reply = one("select count(*) from outreach_outcomes where stage='no_reply'")
         model_calls = dict(conn.execute("select status, count(*) from model_invocations group by 1"))
         end_reasons: dict[str, int] = {}
@@ -101,7 +106,9 @@ def collect(db_path: Path = DEFAULT_DB, eval_cases: Path = EVAL_CASES) -> dict[s
         "draft": {"approved": drafts_approved, "unedited": drafts_unedited, "later_edits": later_edits,
                   "draft_unedited_rate": _rate(drafts_unedited, drafts_approved)},
         "send": {"sent": sent, "sent_before_snapshots": max(sent_before_snapshots - sent, 0)},
-        "reply": {"replied": replied, "no_reply": no_reply, "reply_rate": _rate(replied, replied + no_reply)},
+        "reply": {"replied": replied, "declined": declined, "no_reply": no_reply,
+                  "reply_rate": _rate(replied, replied + no_reply),
+                  "interest_rate": _rate(replied - declined, replied + no_reply)},
         "eval": {"cases": len(cases), "model_cases": eval_model_cases},
         "model_calls": model_calls,
         "open_notes": open_notes,
@@ -153,7 +160,7 @@ def stage_rows(stats: dict[str, Any]) -> list[dict[str, Any]]:
          "detail": f"已发送 {send['sent']} 家", **counted(send["sent"], MIN_SENT)},
         {"key": "reply", "label": "记录回复", "measure": "有结果记录的家数",
          "how": "候选工作流的“等回复”分组里：对方回复后上传私信截图或粘贴原话，选阶段。", "view": "workflow",
-         "detail": f"有回复 {reply['replied']} 家，15 天未回复 {reply['no_reply']} 家",
+         "detail": f"有回复 {reply['replied']} 家（其中拒绝 {reply['declined']} 家），未回复 {reply['no_reply']} 家",
          **counted(reply["replied"] + reply["no_reply"], MIN_SENT)},
         {"key": "eval", "label": "评测集", "measure": "真正考模型的题数",
          "how": "攒够真实店铺后，由你挑有代表性的，告诉 Claude 每家的预期。", "view": None,
@@ -188,7 +195,8 @@ def render(stats: dict[str, Any]) -> str:
         f" → {_verdict('draft_unedited_rate', draft['draft_unedited_rate'], draft['approved'])}",
         f"④ 发送　　已发送 {send['sent']} 家（目标：先到 {MIN_SENT} 家）"
         + (f"；另有 {send['sent_before_snapshots']} 家发送于快照功能之前，不计入分析" if send["sent_before_snapshots"] else ""),
-        f"⑤ 回复　　有回复 {reply['replied']} 家，15 天未回复 {reply['no_reply']} 家（回复率 {_pct(reply['reply_rate'])}）",
+        f"⑤ 回复　　有回复 {reply['replied']} 家（其中拒绝 {reply['declined']} 家），已读不回或 15 天未回复 {reply['no_reply']} 家"
+        f"（回复率 {_pct(reply['reply_rate'])}，有兴趣的比例 {_pct(reply['interest_rate'])}）",
         f"⑥ 评测集　共 {evals['cases']} 题，其中真正考模型的 {evals['model_cases']} 题（目标：{MIN_EVAL_MODEL_CASES} 题）",
         "",
         f"模型调用累计：{json.dumps(stats['model_calls'], ensure_ascii=False)}",

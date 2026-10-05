@@ -33,6 +33,12 @@ def load_product_facts(path: Path = PRODUCT_FACTS_PATH) -> list[str]:
     return json.loads(path.read_text(encoding="utf-8"))["facts"]
 
 
+def _audience_from_snapshot(state: dict[str, Any]) -> str:
+    """Runs screened before the audience field existed still carry the account kind."""
+    kind = (state.get("screening_snapshot") or {}).get("account_kind")
+    return {"enterprise_verified": "store_account", "personal": "personal_shop"}.get(kind, "unknown")
+
+
 def build_agent_input(
     state: dict[str, Any], product_facts: list[str], forced_route: str | None = None
 ) -> LeadAgentInput:
@@ -52,6 +58,7 @@ def build_agent_input(
         xhs_account=(state.get("xhs_id") or None),
         profile_url=state.get("profile_url") or None,
         shop_type=state.get("shop_type") or "suit_custom",
+        audience=state.get("audience") or _audience_from_snapshot(state),
         activity_note=(state.get("activity_note") or "").strip()[:1000] or "人工未填写活跃情况",
         business_context_note=shop_note[:2000] or "人工未填写店铺定位",
         purchase_signal_note=(state.get("purchase_signal_note") or "").strip()[:2000] or None,

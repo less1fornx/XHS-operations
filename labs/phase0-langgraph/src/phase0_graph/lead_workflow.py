@@ -36,6 +36,7 @@ class LeadState(TypedDict, total=False):
     trace: list[str]
     # Phase 2B: human-entered shop context and the model's structured suggestion.
     shop_type: str
+    audience: str
     shop_note: str
     activity_note: str
     purchase_signal_note: str

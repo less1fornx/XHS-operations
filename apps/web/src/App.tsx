@@ -159,6 +159,7 @@ function App() {
   const [contactBasisNote, setContactBasisNote] = useState('')
   const [videoText, setVideoText] = useState('')
   const [shopType, setShopType] = useState<ShopType>('suit_custom')
+  const [audience, setAudience] = useState('unknown')
   const [shopNote, setShopNote] = useState('')
   const [activityNote, setActivityNote] = useState('')
   const [purchaseSignalNote, setPurchaseSignalNote] = useState('')
@@ -257,7 +258,7 @@ function App() {
     void runAction(async () => {
       const next = await api<Run>('/api/runs', {
         method: 'POST',
-        body: JSON.stringify({ shop_name: shopName, xhs_id: xhsId || null, profile_url: profileUrl || null, contact_basis: contactBasis, contact_basis_note: contactBasisNote || null, video_text: videoText, shop_type: shopType, shop_note: shopNote || null, activity_note: activityNote || null, purchase_signal_note: purchaseSignalNote || null }),
+        body: JSON.stringify({ shop_name: shopName, xhs_id: xhsId || null, profile_url: profileUrl || null, contact_basis: contactBasis, contact_basis_note: contactBasisNote || null, video_text: videoText, shop_type: shopType, audience, shop_note: shopNote || null, activity_note: activityNote || null, purchase_signal_note: purchaseSignalNote || null }),
       })
       setShopName('')
       setXhsId('')
@@ -266,6 +267,7 @@ function App() {
       setContactBasisNote('')
       setVideoText('')
       setShopType('suit_custom')
+      setAudience('unknown')
       setShopNote('')
       setActivityNote('')
       setPurchaseSignalNote('')
@@ -301,6 +303,12 @@ function App() {
       method: 'POST',
       body: JSON.stringify({ text: draft, edit_reasons: editReasons, edit_note: editNote || null }),
     }))
+  }
+
+  const regenerateDraft = () => {
+    if (!selected) return
+    if (draft !== (selected.state.draft || '') && !window.confirm('你对当前草稿的修改会被新草稿替换，确定重新生成吗？')) return
+    void runAction(() => api<Run>(`/api/runs/${selected.id}/regenerate`, { method: 'POST' })).then((next) => { if (next) { setDraft(next.state.draft || ''); setEditReasons([]); setEditNote('') } })
   }
 
   const scheduleLater = async () => {
@@ -461,6 +469,7 @@ function App() {
                 <label>店铺类型<select value={shopType} onChange={(event) => setShopType(event.target.value as ShopType)}><option value="suit_custom">西装定制店</option><option value="menswear">成衣品牌 / 男装店</option><option value="apparel_studio">服装工作室</option><option value="content_creator">内容博主</option><option value="staff_account">店员个人号</option><option value="hobbyist">个人爱好者</option><option value="supplier">上游供应商</option><option value="other">其他（与服装无关）</option></select></label>
                 <label>联系依据<select value={contactBasis} onChange={(event) => setContactBasis(event.target.value as ContactBasis)}><option value="cold_outreach">首次陌生联系</option><option value="prior_conversation">已有真实交流</option><option value="inbound_inquiry">对方主动咨询</option><option value="explicit_permission">对方明确同意商务联系</option></select></label>
               </div>
+              <label>这个账号是谁在看消息（决定私信的称呼、长短和切入点）<select value={audience} onChange={(event) => setAudience(event.target.value)}><option value="unknown">不确定</option><option value="store_account">门店或品牌的官方号（客服、运营在看）</option><option value="personal_shop">主理人或裁缝本人的账号</option></select></label>
               <button className="link-button" type="button" onClick={() => setShowMore((current) => !current)}><ChevronDown size={13} className={showMore ? 'flip' : ''} />{showMore ? '收起选填项' : '更多选填项（主页地址、活跃情况、内搭相关信号、依据备注）'}</button>
               {showMore && <>
                 <label>主页地址<input value={profileUrl} onChange={(event) => setProfileUrl(event.target.value)} placeholder="填了之后，发送时可以一键打开对方主页" /></label>
@@ -496,7 +505,7 @@ function App() {
 
               {selected.stage === 'content_review' && <div className="decision-content">
                 <label className="draft-label">{selected.state.channel === 'dm' ? '私信文案' : '评论文案'}（可直接修改）<textarea className="draft-editor" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="模型没有生成草稿，请人工撰写" /></label>
-                <div className="risk-row"><ShieldCheck size={14} />{selected.state.model_route === selected.state.channel ? '草稿由模型生成，已通过策略检查。提交时会对你改过的文案再检查一次。' : (draft ? '你改了路线，模型已按新路线重新生成草稿。提交时会再做策略检查。' : (selected.state.model_error || '模型没有生成草稿，请人工撰写；提交时会做策略检查。'))}<span className="char-count">{draft.length} 字</span></div>
+                <div className="risk-row"><ShieldCheck size={14} />{selected.state.model_route === selected.state.channel ? '草稿由模型生成，已通过策略检查。提交时会对你改过的文案再检查一次。' : (draft ? '你改了路线，模型已按新路线重新生成草稿。提交时会再做策略检查。' : (selected.state.model_error || '模型没有生成草稿，请人工撰写；提交时会做策略检查。'))}<span className="char-count">{draft.length} 字</span><button className="secondary-button small" type="button" disabled={busy} onClick={regenerateDraft} title="用当前的起草规则让模型再写一版，路线不变"><RefreshCw size={13} />{busy ? '生成中，约 10 秒…' : '重新生成'}</button></div>
                 {reasonPicker}
                 <div className="send-options">
                   <div className="send-option primary">

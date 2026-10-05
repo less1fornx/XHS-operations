@@ -38,7 +38,7 @@ export default function ReplyPanel<Run extends { id: string; stage: string; stat
 }) {
   const existing = run.state.reply
   const [options, setOptions] = useState<Options | null>(null)
-  const [stage, setStage] = useState(existing?.replied ? existing.stage : 'wants_info')
+  const [stage, setStage] = useState(existing?.replied ? existing.stage : '')
   const [tags, setTags] = useState<string[]>(existing?.ask_tags || [])
   const [text, setText] = useState(existing?.reply_text || '')
   const [repliedAt, setRepliedAt] = useState(existing?.replied_at ? localInput(new Date(existing.replied_at)) : localInput(new Date()))
@@ -49,7 +49,7 @@ export default function ReplyPanel<Run extends { id: string; stage: string; stat
 
   useEffect(() => { api<Options>('/api/outcome-options').then(setOptions).catch((cause: Error) => onError(cause.message)) }, [])
   useEffect(() => {
-    setStage(existing?.replied ? existing.stage : 'wants_info')
+    setStage(existing?.replied ? existing.stage : '')
     setTags(existing?.ask_tags || [])
     setText(existing?.reply_text || '')
     setRepliedAt(existing?.replied_at ? localInput(new Date(existing.replied_at)) : localInput(new Date()))
@@ -57,7 +57,11 @@ export default function ReplyPanel<Run extends { id: string; stage: string; stat
     setHint('')
   }, [run.id])
 
-  const toggle = (tag: string) => setTags((current) => current.includes(tag) ? current.filter((item) => item !== tag) : [...current, tag])
+  const toggle = (tag: string) => {
+    setTags((current) => current.includes(tag) ? current.filter((item) => item !== tag) : [...current, tag])
+    // A refusal tag implies the stage unless the human already chose one.
+    if (!stage && ['not_needed', 'has_supplier'].includes(tag) && !tags.includes(tag)) setStage('replied_no_intent')
+  }
 
   const readScreenshots = async (files: FileList | null) => {
     if (!files?.length) return
@@ -115,13 +119,14 @@ export default function ReplyPanel<Run extends { id: string; stage: string; stat
       </div>)}
     </div>
 
-    <label>这家店走到哪一步了（你的判断）<select value={stage} onChange={(event) => setStage(event.target.value)}>{replyStages.map(([key, label]) => <option value={key} key={key}>{label}</option>)}</select></label>
+    <label>这家店走到哪一步了（你的判断）<select value={stage} onChange={(event) => setStage(event.target.value)}><option value="" disabled>请选择（必选）</option>{replyStages.map(([key, label]) => <option value={key} key={key}>{label}</option>)}</select></label>
     <label>备注（可选）<input value={note} onChange={(event) => setNote(event.target.value)} placeholder="例如：对方说下个月再看" /></label>
 
     <div className="button-row spread">
       {!existing?.replied ? <button className="secondary-button" type="button" disabled={busy} onClick={() => { if (window.confirm('确定标记为“已读不回”吗？这家店之后不会再被联系。')) save(false) }}><ShieldCheck size={14} />对方已读不回</button> : <span />}
-      <button className="primary-button" type="button" disabled={busy || (!text.trim() && tags.length === 0)} onClick={() => save(true)}><Check size={15} />{existing?.replied ? '更新记录' : '保存回复'}</button>
+      <button className="primary-button" type="button" disabled={busy || !stage || (!text.trim() && tags.length === 0)} onClick={() => save(true)}><Check size={15} />{existing?.replied ? '更新记录' : '保存回复'}</button>
     </div>
     {!text.trim() && tags.length === 0 && <p className="muted">至少填写对方的原话，或选一个标签。</p>}
+    {!stage && (!!text.trim() || tags.length > 0) && <p className="muted">还需要选“这家店走到哪一步了”。</p>}
   </div>
 }

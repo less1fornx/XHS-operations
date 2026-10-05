@@ -605,6 +605,26 @@ class RunStore:
             )
         return stale
 
+    def replace_model_draft(self, run_id: str, update: dict[str, Any]) -> dict[str, Any]:
+        """Swap in a freshly generated draft while the run waits for content review."""
+        with Session(self.engine) as session:
+            snapshot = session.get(RunSnapshot, run_id)
+            if snapshot is None:
+                raise BusinessRuleError("run_not_found", "工作流不存在")
+            if snapshot.stage != "content_review":
+                raise BusinessRuleError("invalid_transition", "只有待审文案的任务可以重新生成草稿")
+            payload = json.loads(snapshot.payload_json)
+            state = payload["state"]
+            state["previous_drafts"] = [*state.get("previous_drafts", []), state.get("draft") or ""][-5:]
+            state.update(update)
+            state["draft"] = update["model_draft"]
+            state["trace"] = [*state.get("trace", []), "draft_regenerated"]
+            snapshot.payload_json = json.dumps(payload, ensure_ascii=False)
+            snapshot.updated_at = utc_now()
+            session.add(RunEvent(run_id=run_id, event_type="draft_regenerated", payload_json=json.dumps(payload, ensure_ascii=False), created_at=utc_now()))
+            session.commit()
+            return payload
+
     def update_draft(self, run_id: str, text: str, edit: dict[str, Any]) -> dict[str, Any]:
         """Human changes an already-approved text before sending; the change is kept."""
         with Session(self.engine) as session:

@@ -156,3 +156,28 @@ def test_qwen_provider_sends_strict_json_schema() -> None:
     assert captured["response_format"]["json_schema"]["strict"] is True
     assert captured["enable_thinking"] is False
     assert "max_tokens" not in captured
+
+
+def test_first_message_style_checks_catch_the_old_template() -> None:
+    from packages.agent_core.style import first_message_style_issues
+
+    old = (
+        "您好，关注到睿曼西服的婚礼西装案例也很显质感。我们是毛衫工厂，累计已承接过约200家西装定制店的业务，"
+        "品质有保障，支持一件起订，没有存货压力。不知贵店目前在西装内搭方面是否有相关需求？"
+    )
+    issues = first_message_style_issues(old, "store_account")
+    assert any("主动权" in issue for issue in issues)
+    assert any("罗列" in issue for issue in issues)
+    assert any("夸奖" in issue for issue in issues)
+
+    new = "看到你用LP羊绒法兰绒做的那套美拉德西装，驳头的弧度很少见。我们是做西装内搭的毛衫工厂，这种厚度的法兰绒，你一般让客人里面配高领还是开衫？"
+    assert first_message_style_issues(new, "personal_shop") == []
+
+
+def test_audience_is_decided_by_the_program() -> None:
+    from packages.agent_core.screening import ShopExtraction, audience_of
+
+    base = {"shop_name": "店", "shop_type": "suit_custom"}
+    assert audience_of(ShopExtraction.model_validate({**base, "account_kind": "enterprise_verified"})) == "store_account"
+    assert audience_of(ShopExtraction.model_validate({**base, "account_kind": "personal"})) == "personal_shop"
+    assert audience_of(ShopExtraction.model_validate({**base, "account_kind": "personal", "store_mentions": ["A店", "B店"]})) == "store_account"

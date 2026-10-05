@@ -140,7 +140,7 @@ store = RunStore(RUN_DB_PATH)
 llm_provider = provider_from_env()
 graph = build_graph(
     checkpointer=checkpointer,
-    suggester=build_suggester(store, llm_provider, load_product_facts()),
+    suggester=(suggester := build_suggester(store, llm_provider, load_product_facts())),
 )
 graph_lock = Lock()
 shop_extractor = shop_extractor_from_env()
@@ -165,6 +165,7 @@ class RunCreate(BaseModel):
     contact_basis: ContactBasis = "cold_outreach"
     contact_basis_note: str | None = None
     shop_type: ShopType = "suit_custom"
+    audience: Literal["store_account", "personal_shop", "unknown"] = "unknown"
     # Pasted profile text can be long; the model input builder trims it.
     shop_note: str | None = Field(default=None, max_length=20000)
     activity_note: str | None = Field(default=None, max_length=20000)
@@ -387,6 +388,7 @@ def start_run(payload: RunCreate) -> dict[str, Any]:
         "contact_basis_note": payload.contact_basis_note or "",
         "video_text": payload.video_text,
         "shop_type": payload.shop_type,
+        "audience": payload.audience,
         "shop_note": payload.shop_note or "",
         "activity_note": payload.activity_note or "",
         "purchase_signal_note": payload.purchase_signal_note or "",
@@ -585,6 +587,32 @@ def edit_draft(run_id: str, payload: DraftEdit) -> dict[str, Any]:
             describe_edit(before, payload.text, payload.edit_reasons, payload.edit_note,
                           record["stage"], datetime.now().isoformat()),
         )
+    except BusinessRuleError as exc:
+        raise HTTPException(status_code=409, detail=f"{exc.code}: {exc.message}") from exc
+
+
+@app.post("/api/runs/{run_id}/regenerate")
+def regenerate_draft(run_id: str) -> dict[str, Any]:
+    """Ask the model for a new draft on the same route with the current prompt.
+
+    The human's route decision stays; only the draft and the model's notes change.
+    """
+    record = store.get(run_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if record["stage"] != "content_review":
+        raise HTTPException(status_code=409, detail="只有待审文案的任务可以重新生成草稿")
+    channel = record["state"].get("channel")
+    if channel not in ("dm", "comment"):
+        raise HTTPException(status_code=409, detail="这条任务没有选定私信或评论路线")
+    update = suggester(record["state"], channel)
+    update.pop("suggested_channel", None)
+    if update.get("model_status") != "succeeded" or not (update.get("model_draft") or "").strip():
+        raise HTTPException(status_code=502, detail=f"重新生成失败，原草稿没有变：{update.get('model_error') or '模型没有返回草稿'}")
+    if policy_flags({"draft": update["model_draft"], "channel": channel}):
+        raise HTTPException(status_code=409, detail="policy_blocked: 新草稿包含不允许的内容，没有采用，原草稿没有变")
+    try:
+        return store.replace_model_draft(run_id, update)
     except BusinessRuleError as exc:
         raise HTTPException(status_code=409, detail=f"{exc.code}: {exc.message}") from exc
 

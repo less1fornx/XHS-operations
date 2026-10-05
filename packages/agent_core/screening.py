@@ -321,6 +321,16 @@ def normalize_xhs_id(value: str | None) -> str:
     return text.strip()
 
 
+def audience_of(extraction: ShopExtraction) -> str:
+    """Program rule, not a model guess: verified or multi-store accounts are read by
+    staff; a personal account running a shop is read by the maker (user 2026-10-05)."""
+    if extraction.account_kind == "enterprise_verified" or len(extraction.store_mentions) >= 2:
+        return "store_account"
+    if extraction.account_kind == "personal":
+        return "personal_shop"
+    return "unknown"
+
+
 def to_lead_context(extraction: ShopExtraction, screening: ShopScreening) -> dict[str, str]:
     """Map a screened shop onto the fields the drafting workflow already accepts."""
     profile_lines = [extraction.bio_text.strip()]
@@ -348,6 +358,7 @@ def to_lead_context(extraction: ShopExtraction, screening: ShopScreening) -> dic
         "shop_name": extraction.shop_name,
         "xhs_id": normalize_xhs_id(extraction.xhs_id),
         "shop_type": extraction.shop_type,
+        "audience": audience_of(extraction),
         "shop_note": "\n".join(line for line in profile_lines if line),
         "activity_note": activity,
         "purchase_signal_note": "\n".join(signal_lines),

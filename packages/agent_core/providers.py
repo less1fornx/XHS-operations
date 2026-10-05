@@ -161,10 +161,10 @@ class MockProvider:
         else:
             route = "dm"
             reason = "目标店铺与产品方向相关，可进行一次低压力的 B2B 需求询问"
-            facts = "、".join(agent_input.product_facts[:4])
+            # Same shape the v5 prompt asks for: their point, one line on us, a question about them.
             draft = (
-                f"你好，看到你们最近的内容提到{primary.text}，和我们的产品方向比较匹配。"
-                f"我们提供{facts}，想了解一下你们近期是否有相关产品需求？"
+                f"看到你们最近的内容提到{primary.text}。"
+                "我们是做西装内搭的毛衫工厂，想请教一下：客人订这类西装时，里面一般怎么搭？"
             )
             points = [PersonalizationPoint(text=primary.text, evidence_ref=primary.evidence_id)]
             product_match = agent_input.product_facts[:4]

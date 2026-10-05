@@ -19,6 +19,9 @@ ShopType = Literal[
 ]
 PriceLevel = Literal["mid_high", "high", "unknown"]
 ContactMode = Literal["cold", "warm", "inbound", "explicit_permission"]
+# Who most likely reads the message (user decision 2026-10-05): a store's official
+# account is read by staff, a personal shop by the maker. The draft differs for each.
+Audience = Literal["store_account", "personal_shop", "unknown"]
 PriorOutcome = Literal["none", "replied", "declined", "read_no_reply", "blocked"]
 QualityFlag = Literal[
     "insufficient_evidence",
@@ -47,6 +50,7 @@ class LeadAgentInput(StrictModel):
     profile_url: str | None = Field(default=None, max_length=1000)
     account_type: AccountType = "unknown"
     shop_type: ShopType
+    audience: Audience = "unknown"
     activity_note: str = Field(min_length=1, max_length=1000)
     price_level: PriceLevel = "unknown"
     business_context_note: str = Field(min_length=1, max_length=2000)
