@@ -605,7 +605,9 @@ class RunStore:
             )
         return stale
 
-    def replace_model_draft(self, run_id: str, update: dict[str, Any]) -> dict[str, Any]:
+    def replace_model_draft(
+        self, run_id: str, update: dict[str, Any], instruction: str | None = None
+    ) -> dict[str, Any]:
         """Swap in a freshly generated draft while the run waits for content review."""
         with Session(self.engine) as session:
             snapshot = session.get(RunSnapshot, run_id)
@@ -615,9 +617,20 @@ class RunStore:
                 raise BusinessRuleError("invalid_transition", "只有待审文案的任务可以重新生成草稿")
             payload = json.loads(snapshot.payload_json)
             state = payload["state"]
-            state["previous_drafts"] = [*state.get("previous_drafts", []), state.get("draft") or ""][-5:]
+            before = state.get("draft") or ""
+            state["previous_drafts"] = [*state.get("previous_drafts", []), before][-5:]
             state.update(update)
             state["draft"] = update["model_draft"]
+            if instruction:
+                # Kept verbatim: the reviewer's own words are the best input for future rules.
+                state["draft_instructions"] = [
+                    *state.get("draft_instructions", []),
+                    {"at": utc_now().isoformat(), "instruction": instruction, "before": before, "after": state["draft"]},
+                ]
+                task = session.exec(select(OutreachTask).where(OutreachTask.workflow_run_id == run_id)).first()
+                if task is not None:
+                    session.add(HumanReview(task_id=task.id, review_type="instruction", decision="rewrite",
+                                            before_text=before, after_text=state["draft"], reason=instruction))
             state["trace"] = [*state.get("trace", []), "draft_regenerated"]
             snapshot.payload_json = json.dumps(payload, ensure_ascii=False)
             snapshot.updated_at = utc_now()

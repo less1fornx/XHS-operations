@@ -41,6 +41,9 @@ type Run = {
     contact_history?: { status: string; do_not_contact: boolean; last_touched_at: string } | null
     model_draft?: string
     draft_edits?: DraftEditRecord[]
+    draft_issues?: string[]
+    redraft_count?: number
+    draft_instructions?: { at: string; instruction: string }[]
     profile_url?: string
     video_text: string
     fit_score?: number
@@ -149,6 +152,7 @@ function App() {
   const [editReasons, setEditReasons] = useState<string[]>([])
   const [editNote, setEditNote] = useState('')
   const [editing, setEditing] = useState(false)
+  const [instruction, setInstruction] = useState('')
   const [reasonOptions, setReasonOptions] = useState<Record<string, string>>({})
   const [endReasonGroups, setEndReasonGroups] = useState<Record<string, Record<string, string>>>({})
   // Not contacting a shop always asks why first (user request 2026-10-05).
@@ -210,6 +214,7 @@ function App() {
     setEditReasons([])
     setEditNote('')
     setEditing(false)
+    setInstruction('')
     setEnding(false)
     setEndReasons([])
     setEndNote('')
@@ -308,7 +313,7 @@ function App() {
   const regenerateDraft = () => {
     if (!selected) return
     if (draft !== (selected.state.draft || '') && !window.confirm('你对当前草稿的修改会被新草稿替换，确定重新生成吗？')) return
-    void runAction(() => api<Run>(`/api/runs/${selected.id}/regenerate`, { method: 'POST' })).then((next) => { if (next) { setDraft(next.state.draft || ''); setEditReasons([]); setEditNote('') } })
+    void runAction(() => api<Run>(`/api/runs/${selected.id}/regenerate`, { method: 'POST', body: JSON.stringify({ instruction: instruction.trim() || null }) })).then((next) => { if (next) { setDraft(next.state.draft || ''); setEditReasons([]); setEditNote(''); setInstruction('') } })
   }
 
   const scheduleLater = async () => {
@@ -505,7 +510,16 @@ function App() {
 
               {selected.stage === 'content_review' && <div className="decision-content">
                 <label className="draft-label">{selected.state.channel === 'dm' ? '私信文案' : '评论文案'}（可直接修改）<textarea className="draft-editor" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="模型没有生成草稿，请人工撰写" /></label>
-                <div className="risk-row"><ShieldCheck size={14} />{selected.state.model_route === selected.state.channel ? '草稿由模型生成，已通过策略检查。提交时会对你改过的文案再检查一次。' : (draft ? '你改了路线，模型已按新路线重新生成草稿。提交时会再做策略检查。' : (selected.state.model_error || '模型没有生成草稿，请人工撰写；提交时会做策略检查。'))}<span className="char-count">{draft.length} 字</span><button className="secondary-button small" type="button" disabled={busy} onClick={regenerateDraft} title="用当前的起草规则让模型再写一版，路线不变"><RefreshCw size={13} />{busy ? '生成中，约 10 秒…' : '重新生成'}</button></div>
+                <div className="risk-row"><ShieldCheck size={14} />{selected.state.model_route === selected.state.channel ? '草稿由模型生成，已通过策略检查。提交时会对你改过的文案再检查一次。' : (draft ? '你改了路线，模型已按新路线重新生成草稿。提交时会再做策略检查。' : (selected.state.model_error || '模型没有生成草稿，请人工撰写；提交时会做策略检查。'))}<span className="char-count">{draft.length} 字</span></div>
+                {(!!selected.state.redraft_count || !!selected.state.draft_issues?.length) && <div className={`check-note ${selected.state.draft_issues?.length ? 'warn' : ''}`}>
+                  {!!selected.state.redraft_count && <span>交给你之前，系统检查后自动重写了 {selected.state.redraft_count} 次。</span>}
+                  {selected.state.draft_issues?.length ? <span>仍有问题，请你留意：{selected.state.draft_issues.join('；')}</span> : <span>目前的草稿通过了格式检查（不代表内容一定合适）。</span>}
+                </div>}
+                <div className="rewrite-row">
+                  <input value={instruction} disabled={busy} onChange={(event) => setInstruction(event.target.value)} placeholder="想让它怎么改？例如：再短一点；别提一件起订；换一个问题问" onKeyDown={(event) => { if (event.key === 'Enter' && !busy) regenerateDraft() }} />
+                  <button className="secondary-button" type="button" disabled={busy} onClick={regenerateDraft}><RefreshCw size={14} />{busy ? '生成中，约 10 秒…' : instruction.trim() ? '按这句话重写' : '重新生成'}</button>
+                </div>
+                {!!selected.state.draft_instructions?.length && <small className="muted">你提过的要求：{selected.state.draft_instructions.map((item) => item.instruction).join('；')}</small>}
                 {reasonPicker}
                 <div className="send-options">
                   <div className="send-option primary">

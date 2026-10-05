@@ -221,3 +221,7 @@ label { font-size:12px; }input,textarea,select { font-size:14px; }
 .reason-columns { display:grid; grid-template-columns:1fr 1fr; gap:24px; }
 .reason-row { display:flex; justify-content:space-between; gap:12px; margin:8px 0 0; padding-bottom:6px; border-bottom:1px solid #edf1f0; font-size:13px; }
 @media (max-width:700px) { .reason-columns { grid-template-columns:1fr; } }
+.rewrite-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center; }
+.check-note { display:grid; gap:3px; padding:8px 11px; border-radius:6px; background:#f3f7f6; color:#52676a; font-size:12px; line-height:1.55; }
+.check-note.warn { background:#fffaf0; border:1px solid #eacb94; color:#7a5310; }
+@media (max-width:700px) { .rewrite-row { grid-template-columns:1fr; } }

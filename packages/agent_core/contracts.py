@@ -65,6 +65,11 @@ class LeadAgentInput(StrictModel):
     brand_context: str | None = Field(default=None, max_length=2000)
     # Set only when a human has already chosen the route and needs a draft for it.
     human_selected_route: Literal["dm", "comment"] | None = None
+    # Revising an earlier draft. One channel, two sources: what the human asked for
+    # at review, and what the program's checks found (designed 2026-10-05).
+    previous_draft: str | None = Field(default=None, max_length=2000)
+    revision_request: str | None = Field(default=None, max_length=500)
+    revision_issues: list[str] = Field(default_factory=list, max_length=10)
 
 
 class PersonalizationPoint(StrictModel):

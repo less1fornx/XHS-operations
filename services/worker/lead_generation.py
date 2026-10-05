@@ -33,14 +33,19 @@ def load_product_facts(path: Path = PRODUCT_FACTS_PATH) -> list[str]:
     return json.loads(path.read_text(encoding="utf-8"))["facts"]
 
 
-def _audience_from_snapshot(state: dict[str, Any]) -> str:
-    """Runs screened before the audience field existed still carry the account kind."""
+def audience_for(state: dict[str, Any]) -> str:
+    """Who reads the message. Runs screened before the field existed still carry the account kind."""
+    if state.get("audience") and state["audience"] != "unknown":
+        return state["audience"]
     kind = (state.get("screening_snapshot") or {}).get("account_kind")
     return {"enterprise_verified": "store_account", "personal": "personal_shop"}.get(kind, "unknown")
 
 
 def build_agent_input(
-    state: dict[str, Any], product_facts: list[str], forced_route: str | None = None
+    state: dict[str, Any],
+    product_facts: list[str],
+    forced_route: str | None = None,
+    revision: dict[str, Any] | None = None,
 ) -> LeadAgentInput:
     """Turn human-entered workflow state into the model contract."""
     basis = state.get("contact_basis", "cold_outreach")
@@ -58,7 +63,7 @@ def build_agent_input(
         xhs_account=(state.get("xhs_id") or None),
         profile_url=state.get("profile_url") or None,
         shop_type=state.get("shop_type") or "suit_custom",
-        audience=state.get("audience") or _audience_from_snapshot(state),
+        audience=audience_for(state),
         activity_note=(state.get("activity_note") or "").strip()[:1000] or "人工未填写活跃情况",
         business_context_note=shop_note[:2000] or "人工未填写店铺定位",
         purchase_signal_note=(state.get("purchase_signal_note") or "").strip()[:2000] or None,
@@ -69,6 +74,9 @@ def build_agent_input(
         prior_outcome="replied" if basis == "prior_conversation" else "none",
         product_facts=product_facts,
         human_selected_route=forced_route,
+        previous_draft=((revision or {}).get("previous_draft") or "")[:2000] or None,
+        revision_request=((revision or {}).get("request") or "")[:500] or None,
+        revision_issues=list((revision or {}).get("issues") or [])[:10],
     )
 
 
@@ -80,9 +88,11 @@ def build_suggester(
     def failed(message: str) -> dict[str, Any]:
         return {"model_status": "failed", "model_error": message, "suggested_channel": "none"}
 
-    def suggest(state: dict[str, Any], forced_route: str | None = None) -> dict[str, Any]:
+    def suggest(
+        state: dict[str, Any], forced_route: str | None = None, revision: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         try:
-            agent_input = build_agent_input(state, product_facts, forced_route)
+            agent_input = build_agent_input(state, product_facts, forced_route, revision)
         except ValidationError as exc:
             return failed(f"录入内容不符合模型输入要求: {exc.errors()[0]['msg']}")
         try:

@@ -35,6 +35,8 @@ if str(LAB_SOURCE) not in sys.path:
 from phase0_graph.lead_workflow import build_graph, policy_flags  # noqa: E402
 from packages.agent_core.edits import EDIT_REASONS, END_REASON_GROUPS, END_REASONS, describe_edit  # noqa: E402
 from packages.agent_core.providers import provider_from_env  # noqa: E402
+from packages.agent_core.style import first_message_style_issues  # noqa: E402
+from services.worker.lead_generation import audience_for  # noqa: E402
 from services.worker.lead_generation import build_suggester, load_product_facts  # noqa: E402
 from packages.agent_core.screening import (  # noqa: E402
     MAX_IMAGES_PER_SHOP,
@@ -138,9 +140,17 @@ checkpointer = SqliteSaver(checkpoint_connection)
 checkpointer.setup()
 store = RunStore(RUN_DB_PATH)
 llm_provider = provider_from_env()
+def check_first_message(state: dict[str, Any]) -> list[str]:
+    """Structure checks for a first cold DM only; comments and replies follow other rules."""
+    if state.get("channel") != "dm" or state.get("contact_basis", "cold_outreach") != "cold_outreach":
+        return []
+    return first_message_style_issues(state.get("draft") or "", audience_for(state))
+
+
 graph = build_graph(
     checkpointer=checkpointer,
     suggester=(suggester := build_suggester(store, llm_provider, load_product_facts())),
+    draft_checker=check_first_message,
 )
 graph_lock = Lock()
 shop_extractor = shop_extractor_from_env()
@@ -591,8 +601,13 @@ def edit_draft(run_id: str, payload: DraftEdit) -> dict[str, Any]:
         raise HTTPException(status_code=409, detail=f"{exc.code}: {exc.message}") from exc
 
 
+class RegenerateRequest(BaseModel):
+    # What the reviewer wants changed, in their own words. Optional.
+    instruction: str | None = Field(default=None, max_length=500)
+
+
 @app.post("/api/runs/{run_id}/regenerate")
-def regenerate_draft(run_id: str) -> dict[str, Any]:
+def regenerate_draft(run_id: str, payload: RegenerateRequest | None = None) -> dict[str, Any]:
     """Ask the model for a new draft on the same route with the current prompt.
 
     The human's route decision stays; only the draft and the model's notes change.
@@ -605,14 +620,20 @@ def regenerate_draft(run_id: str) -> dict[str, Any]:
     channel = record["state"].get("channel")
     if channel not in ("dm", "comment"):
         raise HTTPException(status_code=409, detail="这条任务没有选定私信或评论路线")
-    update = suggester(record["state"], channel)
+    instruction = scrub_contact_info((payload.instruction or "").strip()) if payload else ""
+    previous = record["state"].get("draft") or ""
+    update = suggester(
+        record["state"], channel,
+        {"previous_draft": previous, "request": instruction} if instruction else None,
+    )
     update.pop("suggested_channel", None)
     if update.get("model_status") != "succeeded" or not (update.get("model_draft") or "").strip():
         raise HTTPException(status_code=502, detail=f"重新生成失败，原草稿没有变：{update.get('model_error') or '模型没有返回草稿'}")
     if policy_flags({"draft": update["model_draft"], "channel": channel}):
         raise HTTPException(status_code=409, detail="policy_blocked: 新草稿包含不允许的内容，没有采用，原草稿没有变")
+    update["draft_issues"] = check_first_message({**record["state"], "draft": update["model_draft"]})
     try:
-        return store.replace_model_draft(run_id, update)
+        return store.replace_model_draft(run_id, update, instruction=instruction or None)
     except BusinessRuleError as exc:
         raise HTTPException(status_code=409, detail=f"{exc.code}: {exc.message}") from exc
 

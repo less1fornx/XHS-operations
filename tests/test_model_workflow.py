@@ -141,3 +141,40 @@ def test_old_runs_get_audience_from_the_screening_snapshot() -> None:
     assert build_agent_input(state, ["事实"]).audience == "personal_shop"
     assert build_agent_input({**state, "audience": "store_account"}, ["事实"]).audience == "store_account"
     assert build_agent_input({"shop_name": "店", "video_text": "内容"}, ["事实"]).audience == "unknown"
+
+
+def _loop_graph(drafts: list[str]):
+    """A graph whose model returns the given drafts in order and whose check dislikes '需求'."""
+    from langgraph.checkpoint.memory import MemorySaver
+    from phase0_graph.lead_workflow import build_graph
+
+    calls: list[dict | None] = []
+
+    def suggester(state, forced_route=None, revision=None):
+        calls.append(revision)
+        draft = drafts[min(len(calls) - 1, len(drafts) - 1)]
+        return {"model_status": "succeeded", "model_route": "dm", "suggested_channel": "dm", "model_draft": draft}
+
+    checker = lambda state: ["结尾在问需求"] if "需求" in state["draft"] else []  # noqa: E731
+    return build_graph(MemorySaver(), suggester, checker), calls
+
+
+def test_bad_draft_is_rewritten_before_the_human_sees_it() -> None:
+    graph, calls = _loop_graph(["是否有需求？", "你们一般怎么搭？"])
+    graph.invoke(initial_state("loop-1"), config("loop-1"))
+    state = graph.invoke(Command(resume={"requested_channel": "dm"}), config("loop-1"))
+
+    assert state["draft"] == "你们一般怎么搭？" and state["draft_issues"] == []
+    assert state["redraft_count"] == 1
+    assert calls[1] == {"previous_draft": "是否有需求？", "issues": ["结尾在问需求"]}
+    assert state["__interrupt__"][0].value["type"] == "content_review"
+
+
+def test_redraft_loop_stops_after_two_attempts() -> None:
+    graph, calls = _loop_graph(["是否有需求？"])
+    graph.invoke(initial_state("loop-2"), config("loop-2"))
+    state = graph.invoke(Command(resume={"requested_channel": "dm"}), config("loop-2"))
+
+    assert state["redraft_count"] == 2 and len(calls) == 3
+    assert state["draft_issues"] == ["结尾在问需求"]
+    assert state["__interrupt__"][0].value["type"] == "content_review"

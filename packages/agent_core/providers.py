@@ -166,6 +166,9 @@ class MockProvider:
                 f"看到你们最近的内容提到{primary.text}。"
                 "我们是做西装内搭的毛衫工厂，想请教一下：客人订这类西装时，里面一般怎么搭？"
             )
+            if agent_input.revision_request:
+                # Make a reviewer's instruction visible in mock runs.
+                draft = f"（已按“{agent_input.revision_request}”修改）" + draft
             points = [PersonalizationPoint(text=primary.text, evidence_ref=primary.evidence_id)]
             product_match = agent_input.product_facts[:4]
 

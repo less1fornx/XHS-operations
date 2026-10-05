@@ -56,9 +56,16 @@ class LeadState(TypedDict, total=False):
     xhs_id: str
     contact_history: dict[str, Any] | None
     draft_edits: list[dict[str, Any]]
+    # Automatic check-and-redraft loop before the human sees the draft.
+    draft_issues: list[str]
+    redraft_count: int
+    redraft_log: list[dict[str, Any]]
 
 
 Suggester = Callable[..., dict]
+# Returns the problems found in a draft; an empty list means it may go to the human.
+DraftChecker = Callable[[dict], list[str]]
+MAX_REDRAFTS = 2
 
 
 def collect_evidence(state: LeadState) -> dict:
@@ -236,6 +243,48 @@ def policy_flags(state: LeadState) -> list[str]:
     return flags
 
 
+def make_check_draft(checker: DraftChecker):
+    """Judge only: write the problems into the state. No model call happens here."""
+
+    def check_draft(state: LeadState) -> dict:
+        issues = checker(state) if state.get("draft") else []
+        return {"draft_issues": issues, "trace": state["trace"] + ["check_draft"]}
+
+    return check_draft
+
+
+def route_after_check(state: LeadState) -> Literal["redraft", "continue"]:
+    """The loop's exit: go on when the draft is clean or the retry budget is spent."""
+    if state.get("draft_issues") and state.get("redraft_count", 0) < MAX_REDRAFTS:
+        return "redraft"
+    return "continue"
+
+
+def make_redraft(suggester: Suggester):
+    """Ask the model to fix exactly what the check found, keeping the human's route."""
+
+    def redraft(state: LeadState) -> dict:
+        attempt = state.get("redraft_count", 0) + 1
+        issues = state.get("draft_issues", [])
+        update = suggester(
+            state, state["channel"], {"previous_draft": state.get("draft", ""), "issues": issues}
+        )
+        update.pop("suggested_channel", None)
+        log = [*state.get("redraft_log", []), {"attempt": attempt, "issues": issues, "before": state.get("draft", "")}]
+        if update.get("model_status") != "succeeded" or not (update.get("model_draft") or "").strip():
+            # A failed rewrite must not cost us the draft we already have.
+            return {"redraft_count": attempt, "redraft_log": log, "trace": state["trace"] + ["redraft_failed"]}
+        return {
+            **update,
+            "draft": update["model_draft"],
+            "redraft_count": attempt,
+            "redraft_log": log,
+            "trace": state["trace"] + ["redraft"],
+        }
+
+    return redraft
+
+
 def policy_gate(state: LeadState) -> dict:
     flags = policy_flags(state)
     return {"risk_flags": flags, "trace": state["trace"] + ["policy_gate"]}
@@ -301,7 +350,7 @@ def schedule_reminder(state: LeadState) -> dict:
     }
 
 
-def build_graph(checkpointer=None, suggester: Suggester | None = None):
+def build_graph(checkpointer=None, suggester: Suggester | None = None, draft_checker: DraftChecker | None = None):
     builder = StateGraph(LeadState)
     if suggester is None:
         builder.add_node("collect_evidence", collect_evidence)
@@ -336,7 +385,18 @@ def build_graph(checkpointer=None, suggester: Suggester | None = None):
         builder.add_conditional_edges(
             "model_suggest", route_after_model, {"review": "route_review", "reject": "reject"}
         )
-    builder.add_edge("draft_message", "policy_gate")
+    if suggester is not None and draft_checker is not None:
+        # draft -> check -> (redraft -> check)* -> policy gate. The counter in the
+        # state guarantees the loop ends after MAX_REDRAFTS rewrites.
+        builder.add_node("check_draft", make_check_draft(draft_checker))
+        builder.add_node("redraft", make_redraft(suggester))
+        builder.add_edge("draft_message", "check_draft")
+        builder.add_conditional_edges(
+            "check_draft", route_after_check, {"redraft": "redraft", "continue": "policy_gate"}
+        )
+        builder.add_edge("redraft", "check_draft")
+    else:
+        builder.add_edge("draft_message", "policy_gate")
     builder.add_conditional_edges(
         "policy_gate", route_after_policy, {"review": "content_review", "blocked": "blocked"}
     )
