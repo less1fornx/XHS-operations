@@ -54,7 +54,7 @@ export default function ProgressView({ onNavigate }: { onNavigate: (view: 'scree
       {error && <div className="alert error">{error}</div>}
 
       <section className="panel page-panel">
-        <div className="panel-heading"><div><p className="section-kicker">WHERE TO GIVE FEEDBACK</p><h2>每个环节：在哪里反馈，现在到哪了</h2></div></div>
+        <div className="panel-heading"><div><h2>每个环节：在哪里反馈，现在到哪了</h2></div></div>
         <p className="muted">你在各个页面上的操作本身就是反馈，系统会自动记下来。下面列出每个环节该在哪里操作，以及已经攒了多少。样本没攒够之前，比例只是参考。</p>
         <div className="stage-list">
           {status?.stages.map((stage, index) => <article className="stage-row" key={stage.key}>
@@ -77,7 +77,7 @@ export default function ProgressView({ onNavigate }: { onNavigate: (view: 'scree
       </section>
 
       <section className="panel page-panel">
-        <div className="panel-heading"><div><p className="section-kicker">TELL CLAUDE</p><h2>对系统本身的意见</h2></div></div>
+        <div className="panel-heading"><div><h2>对系统本身的意见</h2></div></div>
         <p className="muted">页面看不懂、流程别扭、规则不合理、想加的功能，都写在这里。每次开工时 Claude 会先读这里的内容。请不要写电话或微信号。</p>
         <div className="feedback-form">
           <label>关于哪一部分

@@ -45,6 +45,7 @@ type ShopResult = {
 type Batch = {
   id: string
   status: 'awaiting_review' | 'drafting' | 'drafted' | 'reviewed' | string
+  review?: { decisions: { shop_key: string; route: Route; tier_feedback: 'agree' | 'disagree' | null; note: string | null }[] } | null
   dm_slots: number
   comment_slots: number
   results: ShopResult[]
@@ -89,7 +90,11 @@ export default function ScreeningView({ onOpenWorkflow }: { onOpenWorkflow: () =
   const openBatch = (next: Batch) => {
     setBatch(next)
     const initial: Record<string, Decision> = {}
-    for (const item of next.ranked) initial[item.shop_key] = { route: item.screening?.suggested_route || 'none', tier_feedback: null, note: '' }
+    const saved = new Map((next.review?.decisions || []).map((decision) => [decision.shop_key, decision]))
+    for (const item of next.ranked) {
+      const previous = saved.get(item.shop_key)
+      initial[item.shop_key] = { route: previous?.route || item.screening?.suggested_route || 'none', tier_feedback: previous?.tier_feedback ?? null, note: previous?.note || '' }
+    }
     setDecisions(initial)
   }
 
@@ -171,7 +176,7 @@ export default function ScreeningView({ onOpenWorkflow }: { onOpenWorkflow: () =
       {error && <div className="alert error"><AlertTriangle size={15} />{error}<button className="alert-close" type="button" onClick={() => setError('')}><X size={14} /></button></div>}
 
       {!batch && <section className="panel">
-        <div className="panel-heading"><div><p className="section-kicker">UPLOAD</p><h2>上传一批店铺截图</h2></div><span className="badge neutral">{filledShops}/{MAX_SHOPS} 家</span></div>
+        <div className="panel-heading"><div><h2>上传一批店铺截图</h2></div><span className="badge neutral">{filledShops}/{MAX_SHOPS} 家</span></div>
         <p className="muted">每家店上传 1 到 {MAX_IMAGES} 张截图，其中至少一张是账号主页。支持 JPG、PNG、WebP，单张不超过 10MB；苹果手机相册里的 HEIC 照片不支持，手机截图默认是 PNG，可以直接用。系统只读取截图里看得见的信息，原图在本机保存 10 天后自动删除。</p>
         <div className="slot-list">
           {slots.map((files, index) => <div className="slot-row" key={index}>
@@ -187,7 +192,7 @@ export default function ScreeningView({ onOpenWorkflow }: { onOpenWorkflow: () =
       </section>}
 
       {!batch && history.length > 0 && <section className="panel">
-        <div className="panel-heading"><div><p className="section-kicker">HISTORY</p><h2>历史批次</h2></div></div>
+        <div className="panel-heading"><div><h2>历史批次</h2></div></div>
         <div className="run-list">
           {history.map((item) => <button className="run-row batch-row" type="button" key={item.id} onClick={() => api<Batch>(`/api/batches/${item.id}`).then(openBatch).catch((cause: Error) => setError(cause.message))}>
             <span className="run-copy"><strong>{new Date(item.created_at).toLocaleString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })} 上传 · {item.shop_count} 家店</strong><small>{item.shop_names?.length ? item.shop_names.join('、') : '没有读出店铺名称'}</small></span>
@@ -198,7 +203,7 @@ export default function ScreeningView({ onOpenWorkflow }: { onOpenWorkflow: () =
 
       {batch && <section className="panel">
         <div className="panel-heading">
-          <div><p className="section-kicker">BATCH REVIEW</p><h2>初筛结果</h2></div>
+          <div><h2>初筛结果</h2></div>
           <button className="secondary-button" type="button" onClick={() => { setBatch(null); void loadHistory() }}>返回上传</button>
         </div>
         <p className="muted">
@@ -220,12 +225,12 @@ export default function ScreeningView({ onOpenWorkflow }: { onOpenWorkflow: () =
             return <article className={`shop-card tier-${s.tier}`} key={item.shop_key}>
               <header>
                 <span className="rank">#{item.rank}</span>
-                <div><strong>{e.shop_name}</strong><small>{locked ? (typeLabel[e.shop_type] || e.shop_type) : <select className="type-select" value={e.shop_type} disabled={busy} title="模型认错了就在这里改，改完会按规则重新分档" onChange={(event) => void correctType(item.shop_key, event.target.value)}>{Object.entries(typeLabel).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select>} · {e.account_kind === 'enterprise_verified' ? '企业认证' : '个人号'}{e.followers_text ? ` · 粉丝 ${e.followers_text}` : ''}{s.latest_post_age_days !== null ? ` · 最近更新 ${s.latest_post_age_days} 天前` : ''}</small></div>
+                <div><strong>{e.shop_name}</strong><small>{locked ? (typeLabel[e.shop_type] || e.shop_type) : <select className="type-select" value={e.shop_type} disabled={busy} title="模型认错了就在这里改，改完会按规则重新分档" onChange={(event) => void correctType(item.shop_key, event.target.value)}>{Object.entries(typeLabel).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select>} · {e.account_kind === 'enterprise_verified' ? '企业认证' : '个人号'}{e.followers_text ? ` · 粉丝 ${e.followers_text.replace(/粉丝/g, '').trim()}` : ''}{s.latest_post_age_days !== null ? ` · 最近更新 ${s.latest_post_age_days} 天前` : ''}</small></div>
                 <span className={`badge ${tierBadge[s.tier]}`}>{tierLabel[s.tier]}</span>
               </header>
               <label className="id-row">小红书号{locked ? <span>{e.xhs_id || '未识别'}</span> : <input key={e.xhs_id || ''} defaultValue={e.xhs_id || ''} placeholder="截图里没有，可手动填写" onBlur={(event) => { if (event.target.value.trim() !== (e.xhs_id || '')) void correct(item.shop_key, { xhs_id: event.target.value.trim() }) }} />}</label>
-              {s.tier !== 'excluded' && !e.xhs_id && <p className="unclear">截图里没有识别到小红书号。没有它就无法唯一确认这家店，请对照主页填写（企业号一般在主页右上角“···”或分享里能看到）。</p>}
-              {!!e.xhs_id && !/^[A-Za-z0-9_.-]{4,30}$/.test(e.xhs_id) && <p className="unclear">这个小红书号的格式看起来不对，请对照截图核对。</p>}
+              {!locked && s.tier !== 'excluded' && !e.xhs_id && <small className="id-hint">没读到小红书号，请对照主页填上（企业号在主页右上角“···”或分享里）。不填则按店名识别，可能认错。</small>}
+              {!locked && !!e.xhs_id && !/^[A-Za-z0-9_.-]{4,30}$/.test(e.xhs_id) && <p className="unclear">这个小红书号的格式看起来不对，请对照截图核对。</p>}
               <div className="thumbs">{item.image_paths.map((path) => <a href={imageUrl(path)} target="_blank" rel="noreferrer" key={path}><img src={imageUrl(path)} alt="截图" onError={(event) => { event.currentTarget.replaceWith(Object.assign(document.createElement('span'), { className: 'muted', textContent: '原图已删除' })) }} /></a>)}</div>
               <p className="reasons">{s.tier_reasons.join('；')}</p>
               {Object.keys(s.signals).length > 0 && <div className="signals">
@@ -234,17 +239,17 @@ export default function ScreeningView({ onOpenWorkflow }: { onOpenWorkflow: () =
                   {signal.evidence.length > 0 && <small>{signal.evidence.slice(0, 2).join('；')}</small>}
                 </div>)}
               </div>}
+              {s.tier !== 'excluded' && d && <div className="feedback tier-feedback">
+                  <span>判为“{tierLabel[s.tier]}”，你同意吗？</span>
+                  <button type="button" disabled={locked} className={d.tier_feedback === 'agree' ? 'active' : ''} onClick={() => updateDecision(item.shop_key, { tier_feedback: 'agree' })}><Check size={13} />同意</button>
+                  <button type="button" disabled={locked} className={d.tier_feedback === 'disagree' ? 'active' : ''} onClick={() => updateDecision(item.shop_key, { tier_feedback: 'disagree' })}><X size={13} />不同意</button>
+                  {d.tier_feedback === 'disagree' && <input value={d.note} disabled={locked} onChange={(event) => updateDecision(item.shop_key, { note: event.target.value })} placeholder="一句话说明理由，例如：其实不讲究面料" />}
+                </div>}
               {s.signals.A_active?.value === 'unknown' && (e.pinned_post_dates?.length ?? 0) > 0 && <p className="unclear">截图里只看到置顶笔记，置顶不代表最近更新，活跃情况记为未知。可以补一张置顶下方的笔记列表截图</p>}
               {e.unclear_fields.length > 0 && <p className="unclear">看不清或截图里没有：{e.unclear_fields.join('、')}，请核对</p>}
               {s.content_angles.length > 0 && <ul className="angles">{s.content_angles.map((angle) => <li key={angle}>{angle}</li>)}</ul>}
               {s.tier !== 'excluded' && d && <footer>
                 <label>本次路线<select value={d.route} disabled={locked} onChange={(event) => updateDecision(item.shop_key, { route: event.target.value as Route })}><option value="dm">私信</option><option value="comment">评论</option><option value="none">这次不联系</option></select></label>
-                <div className="feedback">
-                  <span>分档对吗？</span>
-                  <button type="button" disabled={locked} className={d.tier_feedback === 'agree' ? 'active' : ''} onClick={() => updateDecision(item.shop_key, { tier_feedback: 'agree' })}><Check size={13} />同意</button>
-                  <button type="button" disabled={locked} className={d.tier_feedback === 'disagree' ? 'active' : ''} onClick={() => updateDecision(item.shop_key, { tier_feedback: 'disagree' })}><X size={13} />不同意</button>
-                  {d.tier_feedback === 'disagree' && <input value={d.note} disabled={locked} onChange={(event) => updateDecision(item.shop_key, { note: event.target.value })} placeholder="一句话说明理由，例如：其实不讲究面料" />}
-                </div>
               </footer>}
             </article>
           })}

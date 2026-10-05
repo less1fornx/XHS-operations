@@ -29,7 +29,7 @@ import ProgressView from './Progress'
 type Channel = 'dm' | 'comment' | 'none'
 type ContactBasis = 'cold_outreach' | 'prior_conversation' | 'inbound_inquiry' | 'explicit_permission'
 type Stage = 'route_review' | 'content_review' | 'scheduled' | 'opened' | 'sent' | 'failed' | 'read_no_reply' | 'blocked'
-type View = 'progress' | 'screening' | 'workflow' | 'queue' | 'risk'
+type View = 'progress' | 'screening' | 'workflow' | 'risk'
 type ShopType = 'suit_custom' | 'menswear' | 'apparel_studio' | 'content_creator' | 'staff_account' | 'hobbyist' | 'supplier' | 'other'
 
 type Run = {
@@ -88,7 +88,7 @@ type ListFilter = 'todo' | 'sending' | 'waiting' | 'done' | 'all'
 
 const channelLabel: Record<string, string> = { dm: '私信', comment: '评论', none: '暂不触达' }
 const stageLabel: Record<string, string> = {
-  route_review: '待选路线', content_review: '待审文案', scheduled: '待发送', opened: '发送中', sent: '已发送',
+  route_review: '待选路线', content_review: '待审文案', scheduled: '待发送', opened: '待确认发出', sent: '已发送',
   failed: '发送异常', read_no_reply: '未回复', blocked: '已结束', replied: '已回复',
 }
 const stageBadge: Record<string, string> = {
@@ -102,7 +102,7 @@ const filterStages: Record<ListFilter, string[] | null> = {
   done: ['replied', 'failed', 'read_no_reply', 'blocked'],
   all: null,
 }
-const filterLabel: Record<ListFilter, string> = { todo: '待处理', sending: '待发送', waiting: '等回复', done: '有结果', all: '全部' }
+const filterLabel: Record<ListFilter, string> = { todo: '待处理', sending: '待发送', waiting: '等回复', done: '已结束', all: '全部' }
 const steps = ['选路线', '审文案', '去发送', '记结果']
 const stepIndex: Record<string, number> = { route_review: 0, content_review: 1, scheduled: 2, opened: 2, sent: 3, failed: 3, replied: 4, read_no_reply: 4, blocked: 4 }
 
@@ -136,7 +136,6 @@ function formatWhen(value?: string): string {
 
 function App() {
   const [runs, setRuns] = useState<Run[]>([])
-  const [queue, setQueue] = useState<Run[]>([])
   const [riskEvents, setRiskEvents] = useState<RiskEvent[]>([])
   const [view, setView] = useState<View>('workflow')
   const [filter, setFilter] = useState<ListFilter>('todo')
@@ -180,14 +179,12 @@ function App() {
   }, [runs, filter])
 
   const refresh = async () => {
-    const [nextRuns, nextQueue, nextSummary, nextRiskEvents] = await Promise.all([
+    const [nextRuns, nextSummary, nextRiskEvents] = await Promise.all([
       api<Run[]>('/api/runs'),
-      api<Run[]>('/api/queue'),
       api<Summary>('/api/account/summary'),
       api<RiskEvent[]>('/api/risk-events'),
     ])
     setRuns(nextRuns)
-    setQueue(nextQueue)
     setSummary(nextSummary)
     setRiskEvents(nextRiskEvents)
     if (!selectedId) {
@@ -234,6 +231,8 @@ function App() {
       setBusy(false)
     }
   }
+
+  useEffect(() => { setNotice('') }, [view])
 
   const selectRun = (run: Run) => {
     setSelectedId(run.id)
@@ -365,6 +364,8 @@ function App() {
   const frozen = summary?.status === 'frozen'
   const listHint = (run: Run) => {
     if (run.stage === 'route_review') return run.state.model_status === 'failed' ? '模型调用失败，需人工选路线' : `模型建议：${channelLabel[run.state.suggested_channel || 'none']}`
+    if (run.stage === 'opened') return `${channelLabel[run.state.channel || 'none']} · 页面已打开，等你确认是否发出`
+    if (run.stage === 'sent') return `${channelLabel[run.state.channel || 'none']} · 等对方回复`
     if (run.stage === 'scheduled') return `${channelLabel[run.state.channel || 'none']} · 提醒时间 ${formatWhen(run.state.scheduled_for)}`
     return channelLabel[run.state.channel || run.state.suggested_channel || ''] || '待定'
   }
@@ -405,12 +406,11 @@ function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand-mark"><ShieldCheck size={18} /></div>
-        <div className="brand-copy"><span>local agent</span><strong>运营工作台</strong></div>
+        <div className="brand-copy"><span>本机运行</span><strong>运营工作台</strong></div>
         <nav>
           <button className={`nav-item ${view === 'progress' ? 'active' : ''}`} type="button" onClick={() => setView('progress')}><Gauge size={16} />进度与反馈</button>
           <button className={`nav-item ${view === 'screening' ? 'active' : ''}`} type="button" onClick={() => setView('screening')}><Images size={16} />批量初筛</button>
-          <button className={`nav-item ${view === 'workflow' ? 'active' : ''}`} type="button" onClick={() => setView('workflow')}><Inbox size={16} />候选工作流{counts.todo > 0 && <span className="nav-count">{counts.todo}</span>}</button>
-          <button className={`nav-item ${view === 'queue' ? 'active' : ''}`} type="button" onClick={() => setView('queue')}><Clock3 size={16} />待发送{queue.length > 0 && <span className="nav-count">{queue.length}</span>}</button>
+          <button className={`nav-item ${view === 'workflow' ? 'active' : ''}`} type="button" onClick={() => setView('workflow')}><Inbox size={16} />候选工作流{counts.todo + counts.sending > 0 && <span className="nav-count" title="等你处理或等你发送的任务数">{counts.todo + counts.sending}</span>}</button>
           <button className={`nav-item ${view === 'risk' ? 'active' : ''}`} type="button" onClick={() => setView('risk')}><FileText size={16} />风险记录</button>
         </nav>
         <div className="sidebar-footer"><CircleDot size={12} /><span>本地模式</span><small>发送由人工完成</small></div>
@@ -418,7 +418,7 @@ function App() {
 
       <main className="main-content">
         <header className="topbar">
-          <div><p className="eyebrow">XIAOHONGSHU / PERSONAL</p><h1>{view === 'progress' ? '进度与反馈' : view === 'screening' ? '批量初筛' : view === 'workflow' ? '候选工作流' : view === 'queue' ? '待发送' : '风险记录'}</h1></div>
+          <div><p className="eyebrow">小红书 · 个人号</p><h1>{view === 'progress' ? '进度与反馈' : view === 'screening' ? '批量初筛' : view === 'workflow' ? '候选工作流' : '风险记录'}</h1></div>
           <div className="quota-strip">
             <div><span>今日私信</span><strong>{summary ? `${summary.dm.used}/${summary.dm.limit}` : '--'}</strong></div>
             <div><span>今日评论</span><strong>{summary ? `${summary.comment.used}/${summary.comment.limit}` : '--'}</strong></div>
@@ -449,7 +449,7 @@ function App() {
           </section>
 
           {showForm && <section className="panel detail-panel">
-            <div className="panel-heading"><div><p className="section-kicker">MANUAL ENTRY</p><h2>手动添加一家店铺</h2></div><button className="icon-button" type="button" title="关闭" onClick={() => setShowForm(false)}><X size={15} /></button></div>
+            <div className="panel-heading"><div><h2>手动添加一家店铺</h2></div><button className="icon-button" type="button" title="关闭" onClick={() => setShowForm(false)}><X size={15} /></button></div>
             <p className="muted form-hint">没有截图时用这里。带 <b className="req">*</b> 的必填，其余越具体，草稿越有针对性。</p>
             <div className="form-grid">
               <label>店铺名称 <b className="req">*</b><input value={shopName} onChange={(event) => setShopName(event.target.value)} placeholder="例如：上海某某西装定制" /></label>
@@ -546,29 +546,10 @@ function App() {
           </section>}
         </div>}
 
-        {view === 'queue' && <section className="panel page-panel">
-          <div className="panel-heading"><div><p className="section-kicker">READY TO SEND</p><h2>等你去发送的文案</h2></div><span className="badge neutral">{queue.length} 条</span></div>
-          <div className="queue-table">
-            {queue.length === 0 && <p className="muted">没有待发送的任务。文案审核通过后会出现在这里。</p>}
-            {queue.map((run) => <article className="queue-card" key={run.id}>
-              <header>
-                <span className="run-avatar">{run.state.channel === 'dm' ? <Send size={15} /> : <MessageCircle size={15} />}</span>
-                <span className="run-copy"><strong>{run.state.shop_name}</strong><small>{channelLabel[run.state.channel || 'none']} · 提醒时间 {formatWhen(run.state.scheduled_for)}</small></span>
-                <span className={`badge ${stageBadge[run.stage] || 'neutral'}`}>{stageLabel[run.stage] || run.stage}</span>
-              </header>
-              <p className="queue-text">{run.state.draft || '（没有文案）'}</p>
-              <div className="button-row">
-                <button className="secondary-button small" type="button" onClick={() => void copyText(run.state.draft || '')}><Copy size={13} />复制文案</button>
-                <button className="primary-button small" type="button" onClick={() => { selectRun(run); setFilter('sending'); setView('workflow') }}>去处理</button>
-              </div>
-            </article>)}
-          </div>
-        </section>}
-
         {view === 'progress' && <ProgressView onNavigate={setView} />}
 
         {view === 'risk' && <section className="panel page-panel">
-          <div className="panel-heading"><div><p className="section-kicker">RISK CENTER</p><h2>风险与账号状态</h2></div><span className={`badge ${frozen ? 'danger' : summary?.status === 'degraded' ? 'warning' : 'success'}`}>{frozen ? '队列冻结' : summary?.status === 'degraded' ? '降级运行' : '账号正常'}</span></div>
+          <div className="panel-heading"><div><h2>风险与账号状态</h2></div><span className={`badge ${frozen ? 'danger' : summary?.status === 'degraded' ? 'warning' : 'success'}`}>{frozen ? '队列冻结' : summary?.status === 'degraded' ? '降级运行' : '账号正常'}</span></div>
           {summary?.freeze_reason && <div className="risk-banner"><AlertTriangle size={16} /><span>{summary.freeze_reason}</span></div>}
           <div className="risk-list">
             {riskEvents.length === 0 && <p className="muted">暂无风险记录</p>}
