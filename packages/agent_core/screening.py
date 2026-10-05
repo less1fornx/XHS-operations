@@ -13,7 +13,7 @@ import re
 from datetime import date
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from .contracts import ShopType, StrictModel
 
@@ -27,6 +27,23 @@ MAX_IMAGES_PER_SHOP = 3
 Tier = Literal["high", "medium", "low", "excluded"]
 SignalValue = Literal["yes", "no", "unknown"]
 SuggestedRoute = Literal["dm", "comment", "none"]
+
+
+def trim_model_output(model: type[StrictModel], data: object) -> object:
+    """Cut over-long lists and text from a vision reading down to the contract's limits.
+
+    A chain with 12 branches is a correct reading, not a format error: keep what
+    fits rather than throwing the whole result away (seen 2026-10-05).
+    """
+    if not isinstance(data, dict):
+        return data
+    trimmed = dict(data)
+    for name, field in model.model_fields.items():
+        limit = next((m.max_length for m in field.metadata if getattr(m, "max_length", None)), None)
+        value = trimmed.get(name)
+        if limit and isinstance(value, (list, str)) and len(value) > limit:
+            trimmed[name] = value[:limit]
+    return trimmed
 
 
 class ShopExtraction(StrictModel):
@@ -60,6 +77,11 @@ class ShopExtraction(StrictModel):
     @classmethod
     def unknown_type_is_other(cls, value: object) -> object:
         return "other" if value == "unknown" else value
+
+    @model_validator(mode="before")
+    @classmethod
+    def trim_to_limits(cls, data: object) -> object:
+        return trim_model_output(cls, data)
 
 
 class NotShopPageError(Exception):

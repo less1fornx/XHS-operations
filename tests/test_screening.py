@@ -224,3 +224,15 @@ def test_pinned_notes_do_not_count_towards_activity() -> None:
     )
     assert with_recent.signals["A_active"].value == "yes"
     assert with_recent.latest_post_age_days == 3
+
+
+def test_overlong_lists_are_trimmed_not_rejected() -> None:
+    # A chain listing 12 branches used to fail the whole shop with "格式不对".
+    data = MockShopExtractor().extract([("连锁店.png", b"x")]).extraction.model_dump()
+    data["store_mentions"] = [f"门店{i}" for i in range(12)]
+    data["bio_text"] = "西" * 2500
+
+    extraction = ShopExtraction.model_validate(data)
+
+    assert extraction.store_mentions == [f"门店{i}" for i in range(10)]
+    assert len(extraction.bio_text) == 2000

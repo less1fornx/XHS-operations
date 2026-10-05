@@ -16,7 +16,7 @@ from pydantic import Field, ValidationError, field_validator, model_validator
 from .providers import PROJECT_ROOT, ProviderConfigError, ProviderResponseError
 from .contracts import StrictModel
 from .outcomes import ASK_TAGS, scrub_contact_info
-from .screening import ShopExtraction
+from .screening import ShopExtraction, trim_model_output
 
 
 SHOP_EXTRACTION_PROMPT_VERSION = "shop-extraction-v1"
@@ -185,6 +185,11 @@ class ReplyExtraction(StrictModel):
     contact_info_shared: bool = False
     suggested_tags: list[str] = Field(max_length=15)
     reply_time_text: str | None = Field(default=None, max_length=50)
+
+    @model_validator(mode="before")
+    @classmethod
+    def trim_to_limits(cls, data: object) -> object:
+        return trim_model_output(cls, data)
 
     @field_validator("suggested_tags")
     @classmethod
