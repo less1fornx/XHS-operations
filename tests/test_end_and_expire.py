@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -79,3 +80,17 @@ def test_only_stale_review_runs_expire(tmp_path) -> None:
     assert "自动结束" in store.get("stale")["state"]["result_note"]
     assert store.get("fresh")["stage"] == "content_review"
     assert store.get("queued")["stage"] == "scheduled"
+
+
+def test_ending_a_run_keeps_the_reasons(tmp_path) -> None:
+    store = make_store(tmp_path)
+    save_run(store, "run-1", "content_review")
+
+    payload = store.end_run("run-1", "不联系：连锁太大，门店做不了主", reasons=["chain_hq"], note="总部在广州")
+
+    feedback = payload["state"]["end_feedback"]
+    assert feedback["stage"] == "content_review" and feedback["reasons"] == ["chain_hq"]
+    assert feedback["note"] == "总部在广州"
+    with Session(store.engine) as session:
+        audit = session.exec(select(AuditLog).where(AuditLog.action == "run_ended_by_human")).one()
+    assert json.loads(audit.after_json)["reasons"] == ["chain_hq"]

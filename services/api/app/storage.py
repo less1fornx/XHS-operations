@@ -499,6 +499,8 @@ class RunStore:
         actor: str = "local_user",
         event_type: str = "run_ended_by_human",
         idempotency_key: str | None = None,
+        reasons: list[str] | None = None,
+        note: str | None = None,
     ) -> dict[str, Any]:
         """End an unfinished run without contacting anyone and free its quota."""
         with Session(self.engine) as session:
@@ -518,6 +520,10 @@ class RunStore:
                 state["content_review_status"] = "rejected"
             state["task_status"] = "blocked"
             state["result_note"] = reason
+            # Why the human stopped here, kept for tuning screening and drafts later.
+            feedback = {"stage": ended_stage, "reasons": reasons or [], "note": note, "at": now.isoformat()}
+            if reasons or note:
+                state["end_feedback"] = feedback
             state["trace"] = [*state.get("trace", []), event_type]
             payload.update({"stage": "blocked", "interrupt": None, "state": state})
             snapshot.stage = "blocked"
@@ -532,6 +538,16 @@ class RunStore:
                 task.status = "blocked"
                 task.result_note = reason
                 task.updated_at = now
+                if reasons or note:
+                    session.add(
+                        HumanReview(
+                            task_id=task.id,
+                            review_type="end",
+                            decision="reject",
+                            before_text=state.get("draft") or None,
+                            reason=json.dumps(feedback, ensure_ascii=False),
+                        )
+                    )
             workflow = session.get(WorkflowRun, run_id)
             if workflow is not None:
                 workflow.status = "cancelled"
@@ -554,7 +570,8 @@ class RunStore:
                     entity_type="workflow_run",
                     entity_id=run_id,
                     after_json=json.dumps(
-                        {"ended_stage": ended_stage, "reason": reason}, ensure_ascii=False
+                        {"ended_stage": ended_stage, "reason": reason, "reasons": reasons or [], "note": note},
+                        ensure_ascii=False,
                     ),
                     trace_id=run_id,
                 )

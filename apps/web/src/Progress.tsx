@@ -18,7 +18,8 @@ type Stage = {
   state: 'collecting' | 'met' | 'not_met'
 }
 type Note = { id: string; area: string; text: string; status: string; created_at: string }
-type Status = { stages: Stage[]; feedback_areas: Record<string, string>; notes: Note[] }
+type Count = { label: string; count: number }
+type Status = { stages: Stage[]; feedback_areas: Record<string, string>; notes: Note[]; end_reasons?: Count[]; edit_reasons?: Count[] }
 
 const stateLabel = { collecting: '样本还不够', met: '达标', not_met: '未达标' }
 const stateBadge = { collecting: 'neutral', met: 'success', not_met: 'danger' }
@@ -73,6 +74,17 @@ export default function ProgressView({ onNavigate }: { onNavigate: (view: 'scree
             {stage.view ? <button className="secondary-button small" type="button" onClick={() => onNavigate(stage.view!)}>{viewLabel[stage.view]}<ArrowRight size={13} /></button> : <span />}
           </article>)}
           {!status && !error && <p className="muted">读取中…</p>}
+        </div>
+      </section>
+
+      <section className="panel page-panel">
+        <div className="panel-heading"><div><h2>你给出的原因汇总</h2></div></div>
+        <div className="reason-columns">
+          {([['改草稿的原因', status?.edit_reasons], ['不联系的原因', status?.end_reasons]] as [string, Count[] | undefined][]).map(([title, rows]) => <div key={title}>
+            <strong>{title}</strong>
+            {!rows?.length && <p className="muted">{status ? '还没有记录。' : '读取中…'}</p>}
+            {rows?.map((row) => <p className="reason-row" key={row.label}><span>{row.label}</span><b>{row.count} 次</b></p>)}
+          </div>)}
         </div>
       </section>
 

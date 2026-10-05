@@ -19,6 +19,30 @@ EDIT_REASONS: dict[str, str] = {
     "other": "其他",
 }
 
+# Why a human chose not to contact a shop (reject a draft, pick "no contact", end a
+# task). Requested by the user 2026-10-05; the list itself is Claude's first version
+# and waits for the user's confirmation. The shop-side reasons are what the
+# screening rules will later be tuned against.
+END_REASON_GROUPS: dict[str, dict[str, str]] = {
+    "这家店不合适": {
+        "not_target": "不是西装定制店（类型认错了）",
+        "inactive": "不活跃，很久没更新",
+        "chain_hq": "连锁太大，门店做不了主",
+        "low_end": "档次不符",
+        "has_knitwear": "已经有内搭或针织供应",
+        "already_contacted": "以前联系过或已是客户",
+    },
+    "文案问题": {
+        "draft_unusable": "草稿改不动，不如不发",
+        "nothing_to_say": "找不到可以切入的点",
+    },
+    "其他": {
+        "later": "现在不发，以后再看",
+        "other": "其他",
+    },
+}
+END_REASONS: dict[str, str] = {key: label for group in END_REASON_GROUPS.values() for key, label in group.items()}
+
 
 def diff_ops(before: str, after: str) -> list[dict[str, str]]:
     """Changed spans only, in reading order: what was removed and what replaced it."""

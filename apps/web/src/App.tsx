@@ -150,6 +150,11 @@ function App() {
   const [editNote, setEditNote] = useState('')
   const [editing, setEditing] = useState(false)
   const [reasonOptions, setReasonOptions] = useState<Record<string, string>>({})
+  const [endReasonGroups, setEndReasonGroups] = useState<Record<string, Record<string, string>>>({})
+  // Not contacting a shop always asks why first (user request 2026-10-05).
+  const [ending, setEnding] = useState(false)
+  const [endReasons, setEndReasons] = useState<string[]>([])
+  const [endNote, setEndNote] = useState('')
   const [contactBasis, setContactBasis] = useState<ContactBasis>('cold_outreach')
   const [contactBasisNote, setContactBasisNote] = useState('')
   const [videoText, setVideoText] = useState('')
@@ -204,10 +209,13 @@ function App() {
     setEditReasons([])
     setEditNote('')
     setEditing(false)
+    setEnding(false)
+    setEndReasons([])
+    setEndNote('')
   }, [selectedId, selected?.state.draft, selected?.state.scheduled_for])
 
   useEffect(() => {
-    api<{ reasons: Record<string, string> }>('/api/edit-options').then((data) => setReasonOptions(data.reasons)).catch(() => undefined)
+    api<{ reasons: Record<string, string>; end_reason_groups: Record<string, Record<string, string>> }>('/api/edit-options').then((data) => { setReasonOptions(data.reasons); setEndReasonGroups(data.end_reason_groups || {}) }).catch(() => undefined)
   }, [])
 
   useEffect(() => {
@@ -295,12 +303,6 @@ function App() {
     }))
   }
 
-  const rejectContent = () => {
-    if (!selected) return
-    if (!window.confirm('确定驳回这条文案吗？驳回后这条任务结束，不会联系这家店铺。')) return
-    void runAction(() => submitContent(selected, false, ''))
-  }
-
   const scheduleLater = async () => {
     if (!selected) return
     const next = await runAction(() => submitContent(selected, true, scheduledFor))
@@ -351,13 +353,12 @@ function App() {
   }
 
   const endRun = () => {
-    if (!selected) return
-    if (!window.confirm('确定结束这条任务吗？结束后不会再联系这家店铺，已占用的当日配额会释放。')) return
+    if (!selected || (!endReasons.length && !endNote.trim())) return
     void runAction(() => api<Run>(`/api/runs/${selected.id}/end`, {
       method: 'POST',
       headers: { 'Idempotency-Key': `end-${selected.id}` },
-      body: JSON.stringify({ reason: '人工结束任务' }),
-    }))
+      body: JSON.stringify({ reasons: endReasons, note: endNote || null }),
+    })).then((next) => { if (next) setFilter('done') })
   }
 
   const openStages = ['route_review', 'content_review', 'scheduled', 'opened']
@@ -488,7 +489,7 @@ function App() {
                 <div className="recommendation"><ShieldCheck size={18} /><div><span>模型建议</span><strong>{selected.state.model_status === 'failed' ? '模型调用失败' : channelLabel[selected.state.suggested_channel || 'none']}</strong><p>{selected.state.model_status === 'failed' ? selected.state.model_error : selected.state.model_route_reason || '请确认本次触达方式。'}</p></div></div>
                 <div className="choice-group">
                   {(['dm', 'comment'] as Channel[]).map((channel) => <button className={`choice ${selected.state.suggested_channel === channel ? 'suggested' : ''}`} type="button" key={channel} disabled={busy} onClick={() => decideRoute(channel)}>{channel === 'dm' ? <Send size={16} /> : <MessageCircle size={16} />}<span>{channelLabel[channel]}{selected.state.suggested_channel === channel ? '（模型建议）' : ''}</span><small>{busy ? '处理中…' : selected.state.model_route === channel ? '使用模型草稿，进入文案审核' : '按这条路线重新生成草稿，约 10 秒'}</small></button>)}
-                  <button className="choice danger" type="button" disabled={busy} onClick={() => decideRoute('none')}><X size={16} /><span>暂不触达{selected.state.suggested_channel === 'none' && selected.state.model_status === 'succeeded' ? '（模型建议）' : ''}</span><small>结束这条任务</small></button>
+                  <button className="choice danger" type="button" disabled={busy} onClick={() => setEnding(true)}><X size={16} /><span>暂不触达{selected.state.suggested_channel === 'none' && selected.state.model_status === 'succeeded' ? '（模型建议）' : ''}</span><small>先选原因，再结束这条任务</small></button>
                 </div>
                 {modelDetail}
               </div>}
@@ -541,7 +542,14 @@ function App() {
               {(selected.stage === 'failed' || selected.stage === 'blocked') && <div className="decision-content"><div className="status-card neutral"><AlertTriangle size={18} /><div><strong>{selected.stage === 'failed' ? '已记录发送异常' : '任务已结束，不会联系这家店铺'}</strong><p>{selected.state.result_note || '被策略检查拦截，详情见“风险记录”。'}</p></div></div>{finalText}</div>}
 
               {!['route_review', 'content_review'].includes(selected.stage) && modelDetail && <details className="more-detail"><summary>查看模型依据</summary>{modelDetail}</details>}
-              {openStages.includes(selected.stage) && <div className="end-bar"><span>{['route_review', 'content_review'].includes(selected.stage) ? '48 小时内不处理，系统会自动结束这条任务。' : '不想继续时可以结束任务，当日配额会释放。'}</span>{selected.stage === 'content_review' ? <button className="link-button danger" type="button" disabled={busy} onClick={rejectContent}>驳回并结束</button> : <button className="link-button danger" type="button" disabled={busy} onClick={endRun}>结束任务</button>}</div>}
+              {openStages.includes(selected.stage) && !ending && <div className="end-bar"><span>{['route_review', 'content_review'].includes(selected.stage) ? '48 小时内不处理，系统会自动结束这条任务。' : '不想继续时可以结束任务，当日配额会释放。'}</span><button className="link-button danger" type="button" disabled={busy} onClick={() => setEnding(true)}>{selected.stage === 'content_review' ? '驳回并结束' : '结束任务'}</button></div>}
+              {openStages.includes(selected.stage) && ending && <div className="end-panel">
+                <strong>为什么不联系这家店？</strong>
+                <p className="muted">至少选一项或写一句。这些原因会用来改进以后的筛选和草稿。</p>
+                <div className="tag-groups">{Object.entries(endReasonGroups).map(([group, items]) => <div className="tag-group" key={group}><small>{group}</small><div>{Object.entries(items).map(([key, label]) => <button type="button" key={key} className={endReasons.includes(key) ? 'tag active' : 'tag'} onClick={() => setEndReasons((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key])}>{label}</button>)}</div></div>)}</div>
+                <input value={endNote} onChange={(event) => setEndNote(event.target.value)} placeholder="补充说明（可选），例如：主页写了自有针织工厂" />
+                <div className="button-row spread"><button className="secondary-button" type="button" disabled={busy} onClick={() => setEnding(false)}>先不结束</button><button className="primary-button danger-button" type="button" disabled={busy || (!endReasons.length && !endNote.trim())} onClick={endRun}><X size={14} />确认不联系，结束任务</button></div>
+              </div>}
             </>}
           </section>}
         </div>}

@@ -33,7 +33,7 @@ if str(LAB_SOURCE) not in sys.path:
     sys.path.insert(0, str(LAB_SOURCE))
 
 from phase0_graph.lead_workflow import build_graph, policy_flags  # noqa: E402
-from packages.agent_core.edits import EDIT_REASONS, describe_edit  # noqa: E402
+from packages.agent_core.edits import EDIT_REASONS, END_REASON_GROUPS, END_REASONS, describe_edit  # noqa: E402
 from packages.agent_core.providers import provider_from_env  # noqa: E402
 from services.worker.lead_generation import build_suggester, load_product_facts  # noqa: E402
 from packages.agent_core.screening import (  # noqa: E402
@@ -193,6 +193,15 @@ class DraftEdit(BaseModel):
 
 class EndDecision(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
+    reasons: list[str] = Field(default_factory=list, max_length=10)
+    note: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def known_reasons(self) -> "EndDecision":
+        unknown = [key for key in self.reasons if key not in END_REASONS]
+        if unknown:
+            raise ValueError(f"未知的结束原因：{unknown}")
+        return self
 
 
 class ResultDecision(BaseModel):
@@ -536,8 +545,15 @@ def end_run(
     if cached is not None:
         return cached
     try:
+        note = scrub_contact_info(payload.note.strip()) if payload.note and payload.note.strip() else None
+        labels = [END_REASONS[item] for item in payload.reasons]
+        summary = "；".join([*labels, *([note] if note else [])])
         return store.end_run(
-            run_id, (payload.reason or "").strip() or "人工结束任务", idempotency_key=key
+            run_id,
+            (f"不联系：{summary}" if summary else (payload.reason or "").strip()) or "人工结束任务",
+            idempotency_key=key,
+            reasons=payload.reasons,
+            note=note,
         )
     except BusinessRuleError as exc:
         status = 404 if exc.code == "run_not_found" else 409
@@ -546,7 +562,7 @@ def end_run(
 
 @app.get("/api/edit-options")
 def edit_options() -> dict[str, Any]:
-    return {"reasons": EDIT_REASONS}
+    return {"reasons": EDIT_REASONS, "end_reason_groups": END_REASON_GROUPS}
 
 
 @app.post("/api/runs/{run_id}/draft")
@@ -1023,7 +1039,9 @@ class FeedbackCreate(BaseModel):
 def project_status() -> dict[str, Any]:
     """Progress numbers per stage, straight from the database (same source as the status_report command)."""
     return {
-        "stages": stage_rows(collect_status(RUN_DB_PATH)),
+        "stages": stage_rows(stats := collect_status(RUN_DB_PATH)),
+        "end_reasons": [{"label": END_REASONS.get(k, k), "count": v} for k, v in sorted(stats["end_reasons"].items(), key=lambda kv: -kv[1])],
+        "edit_reasons": [{"label": EDIT_REASONS.get(k, k), "count": v} for k, v in sorted(stats["edit_reasons"].items(), key=lambda kv: -kv[1])],
         "feedback_areas": FEEDBACK_AREAS,
         "notes": store.list_feedback_notes(),
     }

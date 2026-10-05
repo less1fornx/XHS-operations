@@ -6,6 +6,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from packages.agent_core.edits import EDIT_REASONS, END_REASONS
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB = PROJECT_ROOT / "data" / "agent_ops.db"
@@ -63,6 +65,14 @@ def collect(db_path: Path = DEFAULT_DB, eval_cases: Path = EVAL_CASES) -> dict[s
         replied = one("select count(*) from outreach_outcomes where reply_timing in ('normal','late')")
         no_reply = one("select count(*) from outreach_outcomes where stage='no_reply'")
         model_calls = dict(conn.execute("select status, count(*) from model_invocations group by 1"))
+        end_reasons: dict[str, int] = {}
+        edit_reasons: dict[str, int] = {}
+        for review_type, raw in conn.execute(
+            "select review_type, reason from human_reviews where review_type in ('end','content_edit') and reason like '{%'"
+        ):
+            for key in json.loads(raw).get("reasons") or []:
+                bucket = end_reasons if review_type == "end" else edit_reasons
+                bucket[key] = bucket.get(key, 0) + 1
         has_notes = one("select count(*) from sqlite_master where type='table' and name='feedback_notes'")
         open_notes = [
             {"area": area, "text": text, "created_at": created_at}
@@ -95,6 +105,8 @@ def collect(db_path: Path = DEFAULT_DB, eval_cases: Path = EVAL_CASES) -> dict[s
         "eval": {"cases": len(cases), "model_cases": eval_model_cases},
         "model_calls": model_calls,
         "open_notes": open_notes,
+        "end_reasons": end_reasons,
+        "edit_reasons": edit_reasons,
     }
 
 
@@ -180,6 +192,13 @@ def render(stats: dict[str, Any]) -> str:
         f"⑥ 评测集　共 {evals['cases']} 题，其中真正考模型的 {evals['model_cases']} 题（目标：{MIN_EVAL_MODEL_CASES} 题）",
         "",
         f"模型调用累计：{json.dumps(stats['model_calls'], ensure_ascii=False)}",
+    ]
+    def _named(counts: dict[str, int], names: dict[str, str]) -> str:
+        return "、".join(f"{names.get(k, k)} {v}" for k, v in sorted(counts.items(), key=lambda kv: -kv[1])) or "还没有记录"
+
+    lines += [
+        f"不联系的原因：{_named(stats.get('end_reasons') or {}, END_REASONS)}",
+        f"改草稿的原因：{_named(stats.get('edit_reasons') or {}, EDIT_REASONS)}",
     ]
     notes = stats.get("open_notes") or []
     lines += ["", f"用户留下的未处理意见：{len(notes)} 条"]
