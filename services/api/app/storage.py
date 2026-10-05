@@ -859,7 +859,13 @@ class RunStore:
                     "id": row.id,
                     "status": row.status,
                     "shop_count": row.shop_count,
-                    "created_at": row.created_at.isoformat(),
+                    # SQLite drops the timezone; stored values are UTC.
+                    "created_at": row.created_at.replace(tzinfo=timezone.utc).isoformat(),
+                    "shop_names": [
+                        name
+                        for result in json.loads(row.payload_json).get("results", [])
+                        if (name := (result.get("extraction") or {}).get("shop_name"))
+                    ],
                 }
                 for row in session.exec(statement)
             ]

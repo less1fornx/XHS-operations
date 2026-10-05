@@ -52,7 +52,7 @@ type Batch = {
   drafts: { shop_key: string; shop_name: string; route: Route; status: string; error?: string }[]
 }
 
-type BatchSummary = { id: string; status: string; shop_count: number; created_at: string }
+type BatchSummary = { id: string; status: string; shop_count: number; created_at: string; shop_names?: string[] }
 
 type Decision = { route: Route; tier_feedback: 'agree' | 'disagree' | null; note: string }
 
@@ -189,8 +189,8 @@ export default function ScreeningView({ onOpenWorkflow }: { onOpenWorkflow: () =
       {!batch && history.length > 0 && <section className="panel">
         <div className="panel-heading"><div><p className="section-kicker">HISTORY</p><h2>历史批次</h2></div></div>
         <div className="run-list">
-          {history.map((item) => <button className="run-row" type="button" key={item.id} onClick={() => api<Batch>(`/api/batches/${item.id}`).then(openBatch).catch((cause: Error) => setError(cause.message))}>
-            <span className="run-copy"><strong>{new Date(item.created_at).toLocaleString('zh-CN')}</strong><small>{item.shop_count} 家店</small></span>
+          {history.map((item) => <button className="run-row batch-row" type="button" key={item.id} onClick={() => api<Batch>(`/api/batches/${item.id}`).then(openBatch).catch((cause: Error) => setError(cause.message))}>
+            <span className="run-copy"><strong>{new Date(item.created_at).toLocaleString('zh-CN', { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })} 上传 · {item.shop_count} 家店</strong><small>{item.shop_names?.length ? item.shop_names.join('、') : '没有读出店铺名称'}</small></span>
             <span className="badge neutral">{statusLabel[item.status] || item.status}</span>
           </button>)}
         </div>

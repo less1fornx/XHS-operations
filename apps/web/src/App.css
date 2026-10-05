@@ -172,3 +172,4 @@ label { font-size:12px; }input,textarea,select { font-size:14px; }
 .id-row input { padding:5px 8px; font-size:13px; }
 .id-row span { color:var(--ink); font-weight:600; }
 .detail-panel .panel-heading small { display:block; margin-top:4px; }
+.run-row.batch-row { grid-template-columns:minmax(0,1fr) auto; }
