@@ -76,7 +76,7 @@ echo "检查数据库结构…"
 uv run alembic upgrade head
 
 echo "启动后台 API：http://127.0.0.1:$API_PORT"
-PYTHONPATH=labs/phase0-langgraph/src .venv/bin/uvicorn services.api.app.main:app \
+PYTHONPATH=. .venv/bin/uvicorn services.api.app.main:app \
   --host "$HOST" --port "$API_PORT" &
 API_PID=$!
 

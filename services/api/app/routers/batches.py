@@ -31,7 +31,7 @@ from packages.agent_core.screening import (  # noqa: E402
     today_in_shanghai,
 )
 from services.worker.screening import UPLOAD_ROOT, purge_old_uploads  # noqa: E402
-from services.worker.screening_graph import classify_error, rank_results  # noqa: E402
+from packages.workflows.screening_workflow import classify_error, rank_results  # noqa: E402
 from ..flows.run_flow import (  # noqa: E402
     Channel,
 )

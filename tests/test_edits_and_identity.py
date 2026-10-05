@@ -8,7 +8,7 @@ from packages.agent_core.edits import describe_edit, diff_ops
 from packages.agent_core.screening import ShopExtraction, normalize_xhs_id
 from services.api.app.models import ContactSnapshot, HumanReview, ShopLead
 from services.api.app.storage import DEFAULT_ACCOUNT_ID, RunStore
-from services.worker.screening_graph import rank_results
+from packages.workflows.screening_workflow import rank_results
 from datetime import date
 
 

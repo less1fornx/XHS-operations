@@ -10,7 +10,7 @@ from packages.agent_core.providers import ProviderResponseError
 from packages.agent_core.screening import NotShopPageError, ShopExtraction
 from packages.agent_core.vision import ShopExtractor, extraction_prompt_sha256
 from services.api.app.storage import RunStore
-from services.worker.screening_graph import ShopInput, classify_error
+from packages.workflows.screening_workflow import ShopInput, classify_error
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]

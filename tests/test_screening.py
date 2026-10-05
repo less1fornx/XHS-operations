@@ -18,7 +18,7 @@ from packages.agent_core.vision import MockShopExtractor
 from services.api.app.models import ModelInvocation
 from services.api.app.storage import RunStore
 from services.worker.screening import make_read_shop, purge_old_uploads
-from services.worker.screening_graph import build_batch_graph, rank_results
+from packages.workflows.screening_workflow import build_batch_graph, rank_results
 
 
 TODAY = date(2026, 10, 3)

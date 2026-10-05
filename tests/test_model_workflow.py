@@ -8,7 +8,7 @@ from sqlmodel import Session, SQLModel, select
 from packages.agent_core.contracts import LeadAgentInput
 from packages.agent_core.prompting import PromptBundle
 from packages.agent_core.providers import GenerationResult, MockProvider, ProviderResponseError
-from phase0_graph.lead_workflow import build_graph
+from packages.workflows.lead_workflow import build_graph
 from services.api.app.models import ModelInvocation
 from services.api.app.storage import RunStore
 from services.worker.lead_generation import build_agent_input, build_suggester, load_product_facts
@@ -146,7 +146,7 @@ def test_old_runs_get_audience_from_the_screening_snapshot() -> None:
 def _loop_graph(drafts: list[str]):
     """A graph whose model returns the given drafts in order and whose check dislikes '需求'."""
     from langgraph.checkpoint.memory import MemorySaver
-    from phase0_graph.lead_workflow import build_graph
+    from packages.workflows.lead_workflow import build_graph
 
     calls: list[dict | None] = []
 

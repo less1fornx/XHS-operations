@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from langgraph.types import Command
 from sqlmodel import Session, SQLModel
 
-from phase0_graph.lead_workflow import build_graph
+from packages.workflows.lead_workflow import build_graph
 from services.api.app.models import OutreachTask, ShopLead, WorkflowRun
 from services.api.app.storage import DEFAULT_ACCOUNT_ID, RunStore
 

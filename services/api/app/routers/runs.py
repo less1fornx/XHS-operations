@@ -19,7 +19,7 @@ from ..runtime import (  # noqa: E402
     graph_lock,
     REVIEW_TIMEOUT_HOURS,
 )
-from phase0_graph.lead_workflow import policy_flags  # noqa: E402
+from packages.workflows.lead_workflow import policy_flags  # noqa: E402
 from packages.agent_core.edits import END_REASONS, describe_edit  # noqa: E402
 from packages.agent_core.outcomes import (  # noqa: E402
     scrub_contact_info,

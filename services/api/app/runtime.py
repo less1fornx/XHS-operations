@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 import os
 import sqlite3
 from threading import Lock
@@ -14,24 +13,19 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from .storage import RunStore
 
 
-# The Phase 0 graph remains the single workflow source until the domain package
-# is extracted in the next Phase 1 step.
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-LAB_SOURCE = PROJECT_ROOT / "labs" / "phase0-langgraph" / "src"
-if str(LAB_SOURCE) not in sys.path:
-    sys.path.insert(0, str(LAB_SOURCE))
 
-from phase0_graph.lead_workflow import build_graph  # noqa: E402
-from packages.agent_core.providers import provider_from_env  # noqa: E402
-from packages.agent_core.style import first_message_style_issues  # noqa: E402
-from services.worker.lead_generation import audience_for  # noqa: E402
-from services.worker.lead_generation import build_suggester, load_product_facts  # noqa: E402
-from packages.agent_core.screening import (  # noqa: E402
+from packages.workflows.lead_workflow import build_graph
+from packages.agent_core.providers import provider_from_env
+from packages.agent_core.style import first_message_style_issues
+from services.worker.lead_generation import audience_for
+from services.worker.lead_generation import build_suggester, load_product_facts
+from packages.agent_core.screening import (
     today_in_shanghai,
 )
-from packages.agent_core.vision import shop_extractor_from_env  # noqa: E402
-from services.worker.screening import make_read_shop  # noqa: E402
-from services.worker.screening_graph import build_batch_graph  # noqa: E402
+from packages.agent_core.vision import shop_extractor_from_env
+from services.worker.screening import make_read_shop
+from packages.workflows.screening_workflow import build_batch_graph
 
 
 DATA_DIR = PROJECT_ROOT / "data"
