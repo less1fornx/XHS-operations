@@ -9,7 +9,7 @@ from sqlmodel import SQLModel
 
 from services.api.app.storage import RunStore
 from services.worker.backup import backup_if_due
-from services.worker.status_report import collect, render
+from services.worker.status_report import collect, render, stage_rows
 
 
 def test_backup_runs_once_per_day_and_keeps_recent_copies(tmp_path: Path) -> None:
@@ -62,3 +62,13 @@ def test_status_report_counts_real_records(tmp_path: Path) -> None:
     assert stats["send"]["sent"] == 0 and stats["reply"]["reply_rate"] is None
     assert stats["eval"] == {"cases": 2, "model_cases": 1}
     assert "样本不足（2/30）" in render(stats)
+
+    store.add_feedback_note("page", "历史批次的标题显示不全")
+    stats = collect(db, cases)
+    rows = {row["key"]: row for row in stage_rows(stats)}
+
+    assert rows["tier"]["state"] == "collecting" and rows["tier"]["view"] == "screening"
+    assert rows["send"]["sample"] == 0 and rows["send"]["need"] == 20
+    assert [note["text"] for note in stats["open_notes"]] == ["历史批次的标题显示不全"]
+    assert "历史批次的标题显示不全" in render(stats)
+    assert store.list_feedback_notes()[0]["status"] == "open"

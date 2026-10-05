@@ -287,3 +287,15 @@ class RunEvent(SQLModel, table=True):
     payload_json: str = "{}"
     idempotency_key: str | None = Field(default=None, index=True, unique=True)
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class FeedbackNote(SQLModel, table=True):
+    """Free-form remarks the user leaves about the system itself, read at the start of each work session."""
+
+    __tablename__ = "feedback_notes"
+
+    id: str = Field(default_factory=new_id, primary_key=True)
+    area: str = Field(index=True)
+    text: str
+    status: str = Field(default="open", index=True)
+    created_at: datetime = Field(default_factory=utc_now)

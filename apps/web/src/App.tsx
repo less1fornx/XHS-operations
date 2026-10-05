@@ -8,6 +8,7 @@ import {
   Clock3,
   Copy,
   FileText,
+  Gauge,
   Images,
   Inbox,
   MessageCircle,
@@ -23,11 +24,12 @@ import './App.css'
 import { api, copyToClipboard, keyPart } from './api'
 import ScreeningView from './Screening'
 import ReplyPanel, { type ReplyState } from './Reply'
+import ProgressView from './Progress'
 
 type Channel = 'dm' | 'comment' | 'none'
 type ContactBasis = 'cold_outreach' | 'prior_conversation' | 'inbound_inquiry' | 'explicit_permission'
 type Stage = 'route_review' | 'content_review' | 'scheduled' | 'opened' | 'sent' | 'failed' | 'read_no_reply' | 'blocked'
-type View = 'screening' | 'workflow' | 'queue' | 'risk'
+type View = 'progress' | 'screening' | 'workflow' | 'queue' | 'risk'
 type ShopType = 'suit_custom' | 'menswear' | 'apparel_studio' | 'content_creator' | 'staff_account' | 'hobbyist' | 'supplier' | 'other'
 
 type Run = {
@@ -405,6 +407,7 @@ function App() {
         <div className="brand-mark"><ShieldCheck size={18} /></div>
         <div className="brand-copy"><span>local agent</span><strong>运营工作台</strong></div>
         <nav>
+          <button className={`nav-item ${view === 'progress' ? 'active' : ''}`} type="button" onClick={() => setView('progress')}><Gauge size={16} />进度与反馈</button>
           <button className={`nav-item ${view === 'screening' ? 'active' : ''}`} type="button" onClick={() => setView('screening')}><Images size={16} />批量初筛</button>
           <button className={`nav-item ${view === 'workflow' ? 'active' : ''}`} type="button" onClick={() => setView('workflow')}><Inbox size={16} />候选工作流{counts.todo > 0 && <span className="nav-count">{counts.todo}</span>}</button>
           <button className={`nav-item ${view === 'queue' ? 'active' : ''}`} type="button" onClick={() => setView('queue')}><Clock3 size={16} />待发送{queue.length > 0 && <span className="nav-count">{queue.length}</span>}</button>
@@ -415,7 +418,7 @@ function App() {
 
       <main className="main-content">
         <header className="topbar">
-          <div><p className="eyebrow">XIAOHONGSHU / PERSONAL</p><h1>{view === 'screening' ? '批量初筛' : view === 'workflow' ? '候选工作流' : view === 'queue' ? '待发送' : '风险记录'}</h1></div>
+          <div><p className="eyebrow">XIAOHONGSHU / PERSONAL</p><h1>{view === 'progress' ? '进度与反馈' : view === 'screening' ? '批量初筛' : view === 'workflow' ? '候选工作流' : view === 'queue' ? '待发送' : '风险记录'}</h1></div>
           <div className="quota-strip">
             <div><span>今日私信</span><strong>{summary ? `${summary.dm.used}/${summary.dm.limit}` : '--'}</strong></div>
             <div><span>今日评论</span><strong>{summary ? `${summary.comment.used}/${summary.comment.limit}` : '--'}</strong></div>
@@ -561,6 +564,8 @@ function App() {
             </article>)}
           </div>
         </section>}
+
+        {view === 'progress' && <ProgressView onNavigate={setView} />}
 
         {view === 'risk' && <section className="panel page-panel">
           <div className="panel-heading"><div><p className="section-kicker">RISK CENTER</p><h2>风险与账号状态</h2></div><span className={`badge ${frozen ? 'danger' : summary?.status === 'degraded' ? 'warning' : 'success'}`}>{frozen ? '队列冻结' : summary?.status === 'degraded' ? '降级运行' : '账号正常'}</span></div>

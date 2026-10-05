@@ -63,6 +63,15 @@ def collect(db_path: Path = DEFAULT_DB, eval_cases: Path = EVAL_CASES) -> dict[s
         replied = one("select count(*) from outreach_outcomes where reply_timing in ('normal','late')")
         no_reply = one("select count(*) from outreach_outcomes where stage='no_reply'")
         model_calls = dict(conn.execute("select status, count(*) from model_invocations group by 1"))
+        has_notes = one("select count(*) from sqlite_master where type='table' and name='feedback_notes'")
+        open_notes = [
+            {"area": area, "text": text, "created_at": created_at}
+            for area, text, created_at in (
+                conn.execute(
+                    "select area, text, created_at from feedback_notes where status='open' order by created_at"
+                ) if has_notes else []
+            )
+        ]
     finally:
         conn.close()
 
@@ -85,7 +94,59 @@ def collect(db_path: Path = DEFAULT_DB, eval_cases: Path = EVAL_CASES) -> dict[s
         "reply": {"replied": replied, "no_reply": no_reply, "reply_rate": _rate(replied, replied + no_reply)},
         "eval": {"cases": len(cases), "model_cases": eval_model_cases},
         "model_calls": model_calls,
+        "open_notes": open_notes,
     }
+
+
+FEEDBACK_AREAS = {
+    "read": "读店（读图读错、读漏）",
+    "tier": "分档（高中低判得不对）",
+    "draft": "草稿（文案问题）",
+    "send": "发送（打开页面、搜索、复制）",
+    "reply": "记录回复",
+    "page": "页面不好用、看不懂",
+    "other": "其他",
+}
+
+
+def stage_rows(stats: dict[str, Any]) -> list[dict[str, Any]]:
+    """One row per stage: what counts, where the user gives that feedback, and how far along it is."""
+    read, tier, draft = stats["read"], stats["tier"], stats["draft"]
+    send, reply, evals = stats["send"], stats["reply"], stats["eval"]
+
+    def rated(key: str, rate: float | None, sample: int) -> dict[str, Any]:
+        need, bar = TARGETS[key]
+        state = "collecting" if sample < need else ("met" if (rate or 0) >= bar else "not_met")
+        return {"sample": sample, "need": need, "rate": rate, "bar": bar, "state": state}
+
+    def counted(done: int, need: int) -> dict[str, Any]:
+        return {"sample": done, "need": need, "rate": None, "bar": None,
+                "state": "met" if done >= need else "collecting"}
+
+    return [
+        {"key": "read", "label": "读店", "measure": "小红书号识别到的比例",
+         "how": "批量初筛的结果卡片上：核对小红书号，认错的店铺类型直接改。", "view": "screening",
+         "detail": f"读成 {read['shops_read']} 家，失败 {read['shops_failed']} 家，你改正 {read['corrected']} 次",
+         **rated("xhs_id_rate", read["xhs_id_rate"], read["shops_read"])},
+        {"key": "tier", "label": "分档", "measure": "你同意系统分档的比例",
+         "how": "批量初筛的结果卡片上：每家店点“同意”或“不同意”，不同意时写一句理由。", "view": "screening",
+         "detail": f"同意 {tier['agree']} 家，不同意 {tier['disagree']} 家",
+         **rated("tier_agree_rate", tier["tier_agree_rate"], tier["marked"])},
+        {"key": "draft", "label": "起草", "measure": "不用改就能发的草稿比例",
+         "how": "候选工作流里审文案时：不满意就直接改，改完选修改原因。", "view": "workflow",
+         "detail": f"通过 {draft['approved']} 条，没改 {draft['unedited']} 条，通过后又改 {draft['later_edits']} 次",
+         **rated("draft_unedited_rate", draft["draft_unedited_rate"], draft["approved"])},
+        {"key": "send", "label": "发送", "measure": "真实发送的家数",
+         "how": "候选工作流里点“通过并现在去发”，在小红书发完回来点“已发送成功”。", "view": "workflow",
+         "detail": f"已发送 {send['sent']} 家", **counted(send["sent"], MIN_SENT)},
+        {"key": "reply", "label": "记录回复", "measure": "有结果记录的家数",
+         "how": "候选工作流的“等回复”分组里：对方回复后上传私信截图或粘贴原话，选阶段。", "view": "workflow",
+         "detail": f"有回复 {reply['replied']} 家，15 天未回复 {reply['no_reply']} 家",
+         **counted(reply["replied"] + reply["no_reply"], MIN_SENT)},
+        {"key": "eval", "label": "评测集", "measure": "真正考模型的题数",
+         "how": "攒够真实店铺后，由你挑有代表性的，告诉 Claude 每家的预期。", "view": None,
+         "detail": f"共 {evals['cases']} 题", **counted(evals["model_cases"], MIN_EVAL_MODEL_CASES)},
+    ]
 
 
 def _verdict(key: str, rate: float | None, sample: int) -> str:
@@ -120,6 +181,9 @@ def render(stats: dict[str, Any]) -> str:
         "",
         f"模型调用累计：{json.dumps(stats['model_calls'], ensure_ascii=False)}",
     ]
+    notes = stats.get("open_notes") or []
+    lines += ["", f"用户留下的未处理意见：{len(notes)} 条"]
+    lines += [f"  [{FEEDBACK_AREAS.get(n['area'], n['area'])}] {n['text']}" for n in notes]
     return "\n".join(lines)
 
 

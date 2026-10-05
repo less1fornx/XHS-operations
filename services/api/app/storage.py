@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from sqlmodel import Session, create_engine, select
 
 from .models import (
+    FeedbackNote,
     AuditLog,
     ContactSnapshot,
     ContentEvidence,
@@ -793,6 +794,29 @@ class RunStore:
                 if sent_at < cutoff:
                     stale.append(row.id)
             return stale
+
+    def add_feedback_note(self, area: str, text: str) -> dict[str, Any]:
+        with Session(self.engine) as session:
+            note = FeedbackNote(area=area, text=text)
+            session.add(note)
+            session.commit()
+            session.refresh(note)
+            return self._feedback_dict(note)
+
+    def list_feedback_notes(self, limit: int = 50) -> list[dict[str, Any]]:
+        with Session(self.engine) as session:
+            statement = select(FeedbackNote).order_by(FeedbackNote.created_at.desc()).limit(limit)
+            return [self._feedback_dict(note) for note in session.exec(statement)]
+
+    @staticmethod
+    def _feedback_dict(note: FeedbackNote) -> dict[str, Any]:
+        return {
+            "id": note.id,
+            "area": note.area,
+            "text": note.text,
+            "status": note.status,
+            "created_at": note.created_at.replace(tzinfo=timezone.utc).isoformat(),
+        }
 
     def list_reply_records(self) -> list[dict[str, Any]]:
         """Contact-time snapshot joined with what happened afterwards, for analysis."""

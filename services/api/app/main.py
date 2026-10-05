@@ -61,6 +61,7 @@ from packages.agent_core.providers import ProviderResponseError  # noqa: E402
 from packages.agent_core.vision import read_reply, shop_extractor_from_env  # noqa: E402
 from services.worker.screening import UPLOAD_ROOT, make_read_shop, purge_old_uploads  # noqa: E402
 from services.worker.screening_graph import build_batch_graph, rank_results  # noqa: E402
+from services.worker.status_report import FEEDBACK_AREAS, collect as collect_status, stage_rows  # noqa: E402
 
 
 Channel = Literal["dm", "comment", "none"]
@@ -923,3 +924,32 @@ async def read_reply_screenshots(run_id: str, request: Request) -> dict[str, Any
 @app.get("/api/reply-records")
 def reply_records() -> list[dict[str, Any]]:
     return store.list_reply_records()
+
+
+class FeedbackCreate(BaseModel):
+    area: str = Field(min_length=1, max_length=20)
+    text: str = Field(min_length=1, max_length=2000)
+
+    @model_validator(mode="after")
+    def known_area(self) -> "FeedbackCreate":
+        if self.area not in FEEDBACK_AREAS:
+            raise ValueError("未知的意见类别")
+        return self
+
+
+@app.get("/api/status")
+def project_status() -> dict[str, Any]:
+    """Progress numbers per stage, straight from the database (same source as the status_report command)."""
+    return {
+        "stages": stage_rows(collect_status(RUN_DB_PATH)),
+        "feedback_areas": FEEDBACK_AREAS,
+        "notes": store.list_feedback_notes(),
+    }
+
+
+@app.post("/api/feedback")
+def add_feedback(payload: FeedbackCreate) -> dict[str, Any]:
+    text = scrub_contact_info(payload.text.strip())
+    if not text:
+        raise HTTPException(status_code=422, detail="意见内容不能为空")
+    return store.add_feedback_note(payload.area, text)
