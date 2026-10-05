@@ -181,3 +181,15 @@ def test_audience_is_decided_by_the_program() -> None:
     assert audience_of(ShopExtraction.model_validate({**base, "account_kind": "enterprise_verified"})) == "store_account"
     assert audience_of(ShopExtraction.model_validate({**base, "account_kind": "personal"})) == "personal_shop"
     assert audience_of(ShopExtraction.model_validate({**base, "account_kind": "personal", "store_mentions": ["A店", "B店"]})) == "store_account"
+
+
+def test_sameness_separates_template_from_tailored() -> None:
+    from packages.agent_core.style import first_message_style_issues, sameness
+
+    template = ["您好A店。我们是毛衫工厂，累计约200家，品质有保障，支持一件起订。是否有需求？",
+                "您好B店。我们是毛衫工厂，累计约200家，品质有保障，支持一件起订。是否有需求？"]
+    tailored = ["那套炭灰窗格双排扣，驳头开得比常见的低。配它你们一般建议高领还是衬衫？",
+                "800克羊绒做斗篷，垂下来的线条是靠克重撑住的。里面你会让客人穿什么？"]
+    assert sameness(template) > 0.8
+    assert sameness(tailored) < 0.1
+    assert any("下了结论" in issue for issue in first_message_style_issues("这种轻结构对内搭的厚度要求很高。你们怎么配？"))
