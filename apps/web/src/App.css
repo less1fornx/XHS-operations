@@ -173,3 +173,4 @@ label { font-size:12px; }input,textarea,select { font-size:14px; }
 .id-row span { color:var(--ink); font-weight:600; }
 .detail-panel .panel-heading small { display:block; margin-top:4px; }
 .run-row.batch-row { grid-template-columns:minmax(0,1fr) auto; }
+.batch-row .run-copy strong,.batch-row .run-copy small { white-space:normal; overflow:visible; overflow-wrap:anywhere; line-height:1.5; }
