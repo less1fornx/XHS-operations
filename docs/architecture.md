@@ -1,5 +1,7 @@
 # Agent运营工作台架构设计
 
+> 已归档：历史架构说明，只作学习记录。现行架构以 [architecture-final.md](architecture-final.md) 为准，当前进度见 [STATUS.md](STATUS.md)。
+
 ## 1. 目标与非目标
 
 ### 目标

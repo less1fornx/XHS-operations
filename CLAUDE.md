@@ -6,6 +6,8 @@
 
 如果共同记忆中的“Claude 观点”尚未填写，先执行其中的“Claude 首次审查任务”。首次审查阶段不要修改业务代码；先把独立判断写入讨论库并向用户汇报。
 
+项目进度的唯一来源是 `docs/STATUS.md`。每次工作结束，用 `PYTHONPATH=. uv run python -m services.worker.status_report` 取最新数字并更新该页；只使用其中的阶段编号，不再新增其他编号体系。
+
 按任务范围加载正式基线：
 
 - 业务需求使用 `docs/project-memory.md`。

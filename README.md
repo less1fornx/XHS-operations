@@ -28,7 +28,7 @@ agent-app/
 └── infra/                    # Docker、数据库和部署配置
 ```
 
-最终架构基线见 [docs/architecture-final.md](docs/architecture-final.md)；已确认的长期需求见 [docs/project-memory.md](docs/project-memory.md)；历史架构说明见 [docs/architecture.md](docs/architecture.md)，阶段学习记录见 [docs/phase-plan.md](docs/phase-plan.md)。运行时版本见 [docs/node-runtime.md](docs/node-runtime.md)。
+**项目进度、下一步和卡点只看 [docs/STATUS.md](docs/STATUS.md)。** 最终架构基线见 [docs/architecture-final.md](docs/architecture-final.md)；已确认的长期需求见 [docs/project-memory.md](docs/project-memory.md)；历史架构说明见 [docs/architecture.md](docs/architecture.md)，阶段学习记录见 [docs/phase-plan.md](docs/phase-plan.md)。运行时版本见 [docs/node-runtime.md](docs/node-runtime.md)。
 
 ## Phase 1 本地运行
 

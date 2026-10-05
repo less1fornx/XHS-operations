@@ -70,6 +70,8 @@ cleanup() {
 trap cleanup INT TERM EXIT
 
 cd "$ROOT"
+echo "备份数据（每天一次，保留最近 14 天）…"
+PYTHONPATH=. uv run python -m services.worker.backup
 echo "检查数据库结构…"
 uv run alembic upgrade head
 
