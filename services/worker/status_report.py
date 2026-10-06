@@ -111,6 +111,9 @@ def collect(db_path: Path = DEFAULT_DB, eval_cases: Path = EVAL_CASES) -> dict[s
         "send": {"sent": sent, "sent_before_snapshots": max(sent_before_snapshots - sent, 0)},
         "reply": {"replied": replied, "declined": declined, "no_reply": no_reply,
                   "reply_rate": _rate(replied, replied + no_reply),
+                  # An effective conversation: they replied with something other than a refusal
+                  # (asked a question, wanted material). The near-term goal (user 2026-10-06).
+                  "effective": replied - declined,
                   "interest_rate": _rate(replied - declined, replied + no_reply)},
         "eval": {"cases": len(cases), "model_cases": eval_model_cases},
         "model_calls": model_calls,
@@ -150,7 +153,7 @@ def stage_rows(stats: dict[str, Any]) -> list[dict[str, Any]]:
          "how": "批量初筛的结果卡片上：核对小红书号，认错的店铺类型直接改。", "view": "screening",
          "detail": f"读成 {read['shops_read']} 家，失败 {read['shops_failed']} 家，你改正 {read['corrected']} 次",
          **rated("xhs_id_rate", read["xhs_id_rate"], read["shops_read"])},
-        {"key": "tier", "label": "分档", "measure": "你同意系统分档的比例（参考项，现阶段重点是起草）",
+        {"key": "tier", "label": "排先后", "measure": "你同意系统排的先后的比例（参考项）",
          "how": "批量初筛的结果卡片上：每家店点“同意”或“不同意”，不同意时写一句理由。", "view": "screening",
          "detail": f"同意 {tier['agree']} 家，不同意 {tier['disagree']} 家",
          **rated("tier_agree_rate", tier["tier_agree_rate"], tier["marked"])},
@@ -161,9 +164,9 @@ def stage_rows(stats: dict[str, Any]) -> list[dict[str, Any]]:
         {"key": "send", "label": "发送", "measure": "真实发送的家数",
          "how": "候选工作流里点“通过并现在去发”，在小红书发完回来点“已发送成功”。", "view": "workflow",
          "detail": f"已发送 {send['sent']} 家", **counted(send["sent"], MIN_SENT)},
-        {"key": "reply", "label": "记录回复", "measure": "有结果记录的家数",
+        {"key": "reply", "label": "记录回复", "measure": "有效对话的家数（近期目标）和有结果记录的家数",
          "how": "候选工作流的“等回复”分组里：对方回复后上传私信截图或粘贴原话，选阶段。", "view": "workflow",
-         "detail": f"有回复 {reply['replied']} 家（其中拒绝 {reply['declined']} 家），未回复 {reply['no_reply']} 家",
+         "detail": f"有效对话 {reply['effective']} 家；回复了但拒绝 {reply['declined']} 家；未回复 {reply['no_reply']} 家",
          **counted(reply["replied"] + reply["no_reply"], MIN_SENT)},
         {"key": "eval", "label": "评测集", "measure": "真正考模型的题数",
          "how": "攒够真实店铺后，由你挑有代表性的，告诉 Claude 每家的预期。", "view": None,
@@ -198,8 +201,8 @@ def render(stats: dict[str, Any]) -> str:
         f" → {_verdict('draft_unedited_rate', draft['draft_unedited_rate'], draft['approved'])}",
         f"④ 发送　　已发送 {send['sent']} 家（目标：先到 {MIN_SENT} 家）"
         + (f"；另有 {send['sent_before_snapshots']} 家发送于快照功能之前，不计入分析" if send["sent_before_snapshots"] else ""),
-        f"⑤ 回复　　有回复 {reply['replied']} 家（其中拒绝 {reply['declined']} 家），已读不回或 15 天未回复 {reply['no_reply']} 家"
-        f"（回复率 {_pct(reply['reply_rate'])}，有兴趣的比例 {_pct(reply['interest_rate'])}）",
+        f"⑤ 回复　　有效对话 {reply['effective']} 家（对方问了问题或要了资料）；回复了但拒绝 {reply['declined']} 家；"
+        f"已读不回或 15 天未回复 {reply['no_reply']} 家（有效对话占已有结果的 {_pct(reply['interest_rate'])}）",
         f"⑥ 评测集　共 {evals['cases']} 题，其中真正考模型的 {evals['model_cases']} 题（目标：{MIN_EVAL_MODEL_CASES} 题）",
         "",
         f"模型调用累计：{json.dumps(stats['model_calls'], ensure_ascii=False)}",

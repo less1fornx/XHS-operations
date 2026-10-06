@@ -10,6 +10,7 @@ from sqlmodel import Session, SQLModel, select
 from packages.agent_core.screening import (
     ShopExtraction,
     assign_routes,
+    rank_key,
     post_age_days,
     screen_shop,
     to_lead_context,
@@ -53,44 +54,68 @@ def test_post_dates_shown_on_cards_are_parsed() -> None:
     assert post_age_days("赞", TODAY) is None
 
 
-def test_fabric_plus_store_plus_activity_is_high() -> None:
-    result = screen_shop(
-        shop(fabric_mentions=["Loro Piana"], store_mentions=["线下门店"], recent_post_dates=["昨天"]),
-        TODAY,
-    )
-    assert result.tier == "high"
+# --- rules v1: gate, ranking, record-only (user 2026-10-06) ---------------------
 
 
-def test_store_and_activity_without_fabric_or_price_is_medium() -> None:
-    result = screen_shop(shop(store_mentions=["线下门店"], recent_post_dates=["昨天"]), TODAY)
+def test_visible_high_price_and_recent_activity_come_first() -> None:
+    result = screen_shop(shop(price_mentions=["¥2999"], recent_post_dates=["昨天"]), TODAY)
+    assert result.tier == "high" and result.signals["C_price"].value == "yes"
+
+
+def test_price_at_the_gate_counts_as_enough() -> None:
+    assert screen_shop(shop(price_mentions=["¥1600"], recent_post_dates=["昨天"]), TODAY).tier == "high"
+
+
+def test_no_price_passes_the_gate_but_ranks_later() -> None:
+    # Most shops do not print prices; unknown is not the same as low.
+    result = screen_shop(shop(recent_post_dates=["昨天"]), TODAY)
+    assert result.tier == "medium" and result.signals["C_price"].value == "unknown"
+    assert any("补一张带价格的截图" in reason for reason in result.tier_reasons)
+
+
+def test_shop_whose_dearest_price_is_below_the_gate_is_not_contacted() -> None:
+    result = screen_shop(shop(price_mentions=["¥980", "套装 1280元"], recent_post_dates=["昨天"]), TODAY)
+    assert result.tier == "excluded" and "1280" in result.tier_reasons[0]
+
+
+def test_starting_prices_and_extras_do_not_fail_the_gate() -> None:
+    # "1k+" is a floor, and a 298 tie or a 500 coupon says nothing about suit prices.
+    assert screen_shop(shop(price_mentions=["1k+"]), TODAY).tier == "medium"
+    mixed = screen_shop(shop(price_mentions=["¥2999", "享 298真丝领带一条", "500的专属优惠券"], recent_post_dates=["昨天"]), TODAY)
+    assert mixed.tier == "high"
+
+
+def test_wording_alone_no_longer_counts_as_a_high_price() -> None:
+    # v0 let "高级定制" stand in for a price, so nearly every shop ranked high.
+    result = screen_shop(shop(high_end_mentions=["高级定制", "全手工"], fabric_mentions=["Scabal"], recent_post_dates=["昨天"]), TODAY)
     assert result.tier == "medium"
 
 
-def test_visible_price_at_threshold_counts_as_high_price() -> None:
-    result = screen_shop(shop(price_mentions=["¥1600"], store_mentions=["门店"]), TODAY)
-    assert result.signals["C_high_price"].value == "yes"
-    assert result.tier == "high"
+def test_stale_shop_goes_last_whatever_else_it_shows() -> None:
+    result = screen_shop(shop(price_mentions=["¥5000"], recent_post_dates=["2026-04-14"]), TODAY)
+    assert result.tier == "low" and any("超过 3 个月" in reason for reason in result.tier_reasons)
 
 
-def test_unseen_price_is_unknown_not_no() -> None:
-    result = screen_shop(shop(), TODAY)
-    assert result.signals["C_high_price"].value == "unknown"
+def test_recorded_facts_do_not_change_the_order() -> None:
+    plain = shop(price_mentions=["¥2999"], recent_post_dates=["3天前"])
+    dressed = shop(price_mentions=["¥2999"], recent_post_dates=["3天前"], pinned_post_dates=["2024-05"],
+                   fabric_mentions=["Loro Piana"], store_mentions=["A店", "B店"], account_kind="enterprise_verified",
+                   knitwear_present="yes")
+    first, second = screen_shop(plain, TODAY), screen_shop(dressed, TODAY)
+    assert rank_key(first, plain) == rank_key(second, dressed)
+    assert second.recorded["置顶笔记"] == "有" and second.recorded["账号"] == "企业认证号"
+    assert first.recorded["置顶笔记"] == "截图里没看到"
 
 
-def test_inactive_shop_is_low_even_with_strong_signals() -> None:
-    result = screen_shop(
-        shop(fabric_mentions=["Scabal"], high_end_mentions=["全手工"], recent_post_dates=["2026-04-14"]),
-        TODAY,
-    )
-    assert result.tier == "low"
+def test_visible_price_ranks_before_unknown_price_within_a_tier() -> None:
+    seen = shop(price_mentions=["¥2999"], recent_post_dates=["09-01"])      # 32 days: medium
+    unseen = shop(recent_post_dates=["昨天"])                                # no price: medium
+    assert rank_key(screen_shop(seen, TODAY), seen) < rank_key(screen_shop(unseen, TODAY), unseen)
 
 
-def test_non_suit_shop_is_capped_at_medium() -> None:
-    result = screen_shop(
-        shop(shop_type="content_creator", fabric_mentions=["Zegna"], high_end_mentions=["高定"]),
-        TODAY,
-    )
-    assert result.tier == "medium"
+def test_non_suit_shop_passes_but_is_flagged_and_ranked_later() -> None:
+    result = screen_shop(shop(shop_type="content_creator", price_mentions=["¥5000"], recent_post_dates=["昨天"]), TODAY)
+    assert result.tier == "medium" and "不是西装定制店" in result.tier_reasons[0]
 
 
 def test_suppliers_are_excluded() -> None:
@@ -98,10 +123,13 @@ def test_suppliers_are_excluded() -> None:
 
 
 def test_routes_fill_quota_in_rank_order() -> None:
-    high = [screen_shop(shop(fabric_mentions=["x"], store_mentions=["y"]), TODAY) for _ in range(3)]
-    medium = [screen_shop(shop(store_mentions=["y"]), TODAY) for _ in range(2)]
-    assign_routes(high + medium, dm_slots=2, comment_slots=2)
-    assert [s.suggested_route for s in high + medium] == ["dm", "dm", "comment", "comment", "none"]
+    # The tier decides who is seen first, not the route: DMs go out in rank order, then comments.
+    first = [screen_shop(shop(price_mentions=["¥2999"], recent_post_dates=["昨天"]), TODAY) for _ in range(1)]
+    later = [screen_shop(shop(recent_post_dates=["昨天"]), TODAY) for _ in range(3)]
+    stale = [screen_shop(shop(recent_post_dates=["2026-01-01"]), TODAY)]
+    ordered = first + later + stale
+    assign_routes(ordered, dm_slots=2, comment_slots=1)
+    assert [item.suggested_route for item in ordered] == ["dm", "dm", "comment", "none", "none"]
 
 
 def test_lead_context_carries_evidence_for_drafting() -> None:
@@ -151,7 +179,7 @@ def test_batch_reads_each_shop_isolates_failures_and_waits_for_review(tmp_path) 
         "shop_2": "read",
     }
     tiers = {r["shop_key"]: r["screening"]["tier"] for r in state["ranked"]}
-    assert tiers == {"shop_0": "high", "shop_2": "excluded"}
+    assert tiers == {"shop_0": "medium", "shop_2": "excluded"}
     assert state["ranked"][0]["screening"]["suggested_route"] == "dm"
     assert state["__interrupt__"][0].value["type"] == "batch_review"
     with Session(store.engine) as session:
@@ -188,8 +216,8 @@ def test_correcting_shop_type_re_tiers_the_shop() -> None:
     results[0]["extraction"]["shop_type"] = "suit_custom"
     after = rank_results(results, TODAY, lambda name, xhs_id="": False, 5, 3)
 
-    assert before[0]["screening"]["tier"] == "medium"
-    assert after[0]["screening"]["tier"] == "high"
+    assert "不是西装定制店" in before[0]["screening"]["tier_reasons"][0]
+    assert after[0]["screening"]["tier_reasons"][0] == "门槛通过"
     assert after[0]["screening"]["suggested_route"] == "dm"
 
 

@@ -18,7 +18,7 @@ from pydantic import Field, field_validator, model_validator
 from .contracts import ShopType, StrictModel
 
 
-SCREENING_RULES_VERSION = "screening-rules-v0"
+SCREENING_RULES_VERSION = "screening-rules-v1"
 
 # User decision: at most 10 shops per batch, at most 3 screenshots per shop.
 MAX_SHOPS_PER_BATCH = 10
@@ -131,6 +131,9 @@ class ShopScreening(StrictModel):
     tier_reasons: list[str]
     prerequisite_met: bool
     signals: dict[str, Signal]
+    # Facts kept for later comparison with outcomes. They change nothing today
+    # (user decision 2026-10-06): a fact moves into ranking only once data supports it.
+    recorded: dict[str, str] = Field(default_factory=dict)
     latest_post_age_days: int | None
     suggested_route: SuggestedRoute = "none"
     content_angles: list[str]
@@ -177,99 +180,122 @@ def post_age_days(text: str, today: date) -> int | None:
     return None
 
 
-# --- Signal C: price ----------------------------------------------------------
+# --- Price --------------------------------------------------------------------
 
-_PRICE = re.compile(r"[¥￥]\s*(\d{3,6})|(\d{3,6})\s*元")
-HIGH_PRICE_THRESHOLD = 1600  # user rule: sale price at or above 1600
-LOW_PRICE_CEILING = 1000
+# Our inner layers sell at roughly 500 (basic tee) to 600-800 (long sleeve); a shop
+# whose dearest suit is under this cannot plausibly add one (user 2026-10-06).
+SUIT_PRICE_GATE = 1600
+STALE_AFTER_DAYS = 90
+ACTIVE_WITHIN_DAYS = 30
+
+_AMOUNT = re.compile(r"(?:[¥￥]\s*)?(\d+(?:\.\d+)?)\s*([kKwW万千]?)\s*(\+|元?\s*起|元)?")
+_NOT_A_PRICE = ("券", "优惠", "立减", "满减", "红包", "折", "定金", "订金", "粉丝")
+_UNIT = {"k": 1000, "K": 1000, "千": 1000, "w": 10000, "W": 10000, "万": 10000, "": 1}
+
+
+def parse_prices(mentions: list[str]) -> list[tuple[int, bool]]:
+    """Prices read from screenshot text as (amount, is_starting_price).
+
+    "2000+起" and "1k+" are floors: the shop charges at least that, the top is unknown.
+    Coupon and deposit amounts, weights and counts are not prices.
+    """
+    found: list[tuple[int, bool]] = []
+    for mention in mentions:
+        if any(word in mention for word in _NOT_A_PRICE):
+            continue
+        for match in _AMOUNT.finditer(mention):
+            number, unit, tail = match.group(1), match.group(2), match.group(3) or ""
+            marked = match.group(0).lstrip().startswith(("¥", "￥")) or unit or tail
+            amount = int(float(number) * _UNIT[unit])
+            if marked and 100 <= amount <= 500_000:
+                found.append((amount, "+" in tail or "起" in tail))
+    return found
 
 
 def visible_prices(mentions: list[str]) -> list[int]:
-    prices: list[int] = []
-    for mention in mentions:
-        for match in _PRICE.finditer(mention):
-            prices.append(int(match.group(1) or match.group(2)))
-    return prices
+    return [amount for amount, _ in parse_prices(mentions)]
 
 
-# --- Tiering ------------------------------------------------------------------
+# --- Three layers: gate, ranking, record-only (rules v1) ------------------------
 
 NOT_PROACTIVE_TYPES = ("supplier", "hobbyist", "other")
 SECONDARY_TYPES = ("content_creator", "staff_account")
+TYPE_NAMES_ZH = {
+    "suit_custom": "西装定制店", "menswear": "成衣品牌或男装店", "apparel_studio": "服装工作室",
+    "content_creator": "内容博主", "staff_account": "店员个人号", "hobbyist": "个人爱好者",
+    "supplier": "上游供应商", "other": "与服装无关",
+}
+
+
+def _excluded(reason: str, recorded: dict[str, str] | None = None) -> ShopScreening:
+    return ShopScreening(
+        tier="excluded", tier_reasons=[reason], prerequisite_met=False, signals={},
+        recorded=recorded or {}, latest_post_age_days=None, content_angles=[],
+    )
+
+
+def recorded_facts(extraction: ShopExtraction) -> dict[str, str]:
+    stores = len(extraction.store_mentions)
+    return {
+        "置顶笔记": "有" if extraction.pinned_post_dates else "截图里没看到",
+        "账号": {"enterprise_verified": "企业认证号", "personal": "个人号"}.get(extraction.account_kind, "未知"),
+        "门店信息": f"{stores} 条" if stores else "截图里没看到",
+        "内搭或针织内容": {"yes": "出现过", "no": "没出现", "unknown": "未知"}[extraction.knitwear_present],
+        "提到面料": "；".join(extraction.fabric_mentions[:3]) or "没有",
+    }
 
 
 def screen_shop(extraction: ShopExtraction, today: date) -> ShopScreening:
-    reasons: list[str] = []
+    """Gate first (may we contact at all), then how early to look at it. Never a win probability."""
+    recorded = recorded_facts(extraction)
 
+    # Layer 1: gate.
     if extraction.shop_type in NOT_PROACTIVE_TYPES:
-        return ShopScreening(
-            tier="excluded",
-            tier_reasons=[f"店铺类型为 {extraction.shop_type}，不作为主动私信对象"],
-            prerequisite_met=False,
-            signals={},
-            latest_post_age_days=None,
-            content_angles=[],
-        )
+        return _excluded(f"门槛没过：识别为{TYPE_NAMES_ZH[extraction.shop_type]}，不主动联系（认错了可以在上面改）", recorded)
+    prices = parse_prices(extraction.price_mentions)
+    exact_only = bool(prices) and not any(is_floor for _, is_floor in prices)
+    top = max((amount for amount, _ in prices), default=None)
+    if exact_only and top is not None and top < SUIT_PRICE_GATE:
+        return _excluded(f"门槛没过：看得到的最高价格 {top} 元，低于 {SUIT_PRICE_GATE} 元", recorded)
 
+    # Layer 2: ranking facts.
     ages = [age for age in (post_age_days(t, today) for t in extraction.recent_post_dates) if age is not None]
     latest = min(ages) if ages else None
-    prices = visible_prices(extraction.price_mentions)
-
+    price_ok = top is not None and top >= SUIT_PRICE_GATE
     signals = {
         "A_active": Signal(
-            value="unknown" if latest is None else ("yes" if latest <= 30 else "no"),
+            value="unknown" if latest is None else ("yes" if latest <= ACTIVE_WITHIN_DAYS else "no"),
             evidence=extraction.recent_post_dates[:5],
         ),
-        "B_fabric": Signal(
-            value="yes" if extraction.fabric_mentions else "no",
-            evidence=extraction.fabric_mentions[:5],
-        ),
-        "C_high_price": Signal(
-            value=(
-                "yes"
-                if any(p >= HIGH_PRICE_THRESHOLD for p in prices) or extraction.high_end_mentions
-                else ("no" if prices else "unknown")
-            ),
-            evidence=(extraction.price_mentions + extraction.high_end_mentions)[:5],
-        ),
-        "D_store": Signal(
-            value="yes" if extraction.store_mentions else "unknown",
-            evidence=extraction.store_mentions[:5],
+        "C_price": Signal(
+            value="yes" if price_ok else "unknown",
+            evidence=extraction.price_mentions[:5],
         ),
     }
-    hits = [name for name, signal in signals.items() if signal.value == "yes"]
-    prerequisite = extraction.shop_type == "suit_custom"
+    is_suit_shop = extraction.shop_type == "suit_custom"
+    reasons: list[str] = ["门槛通过" if is_suit_shop else f"识别为{TYPE_NAMES_ZH[extraction.shop_type]}，不是西装定制店，排在后面，由你决定"]
+    reasons.append(
+        f"价格看得见且够高（最高 {top} 元）" if price_ok
+        else ("只看到起步价，够不够高不确定，建议补一张带价格的截图" if prices else "截图里没有价格，建议补一张带价格的截图")
+    )
+    reasons.append(
+        "活跃情况未知" if latest is None
+        else (f"最近 {latest} 天前更新" if latest <= STALE_AFTER_DAYS else f"最近一次更新在 {latest} 天前，超过 3 个月，消息可能没人看")
+    )
 
-    downgrades: list[str] = []
-    if latest is not None and latest > 90:
-        downgrades.append(f"最近一次更新在 {latest} 天前，超过 3 个月")
-    if prices and max(prices) < LOW_PRICE_CEILING and not extraction.high_end_mentions:
-        downgrades.append(f"可见价格最高 {max(prices)} 元，明显低于 1000 元")
-    if extraction.shop_type == "menswear" and extraction.knitwear_present == "yes":
-        downgrades.append("成衣品牌且已有自己的针织产品")
-
-    if downgrades:
+    if latest is not None and latest > STALE_AFTER_DAYS:
         tier: Tier = "low"
-        reasons.extend(downgrades)
-    elif (
-        prerequisite
-        and len(hits) >= 2
-        and ("B_fabric" in hits or "C_high_price" in hits)
-    ):
+    elif is_suit_shop and price_ok and latest is not None and latest <= ACTIVE_WITHIN_DAYS:
         tier = "high"
-        reasons.append(f"主营西装定制，满足 {len(hits)} 项信号，且包含面料或客单价")
     else:
         tier = "medium"
-        if not prerequisite:
-            reasons.append("不是西装定制店，最高只能评为中")
-        else:
-            reasons.append(f"满足 {len(hits)} 项信号，未达到高匹配条件")
 
     return ShopScreening(
         tier=tier,
         tier_reasons=reasons,
-        prerequisite_met=prerequisite,
+        prerequisite_met=is_suit_shop,
         signals=signals,
+        recorded=recorded,
         latest_post_age_days=latest,
         content_angles=content_angles(extraction),
     )
@@ -295,17 +321,25 @@ TIER_ORDER = {"high": 0, "medium": 1, "low": 2, "excluded": 3}
 
 
 def rank_key(screening: ShopScreening, extraction: ShopExtraction) -> tuple:
-    hits = sum(1 for signal in screening.signals.values() if signal.value == "yes")
+    """Earlier = look at it first: tier, then visible-and-high price, then most recently active.
+    Recorded-only facts (pinned notes, fabric, account kind) deliberately play no part."""
+    price_seen = screening.signals.get("C_price") is not None and screening.signals["C_price"].value == "yes"
     age = screening.latest_post_age_days if screening.latest_post_age_days is not None else 10_000
-    return (TIER_ORDER[screening.tier], -hits, age, -len(extraction.fabric_mentions))
+    return (TIER_ORDER[screening.tier], 0 if price_seen else 1, age)
 
 
 def assign_routes(ordered: list[ShopScreening], dm_slots: int, comment_slots: int) -> None:
-    """Fill today's remaining quota in rank order: high tier to DM first, then comments."""
+    """Hand out today's remaining quota in rank order: DMs first, then comments.
+
+    The tier decides how early a shop is seen, not which route it gets (user 2026-10-05:
+    either route can fit). Stale and excluded shops get no suggestion.
+    """
     for screening in ordered:
-        if screening.tier == "high" and dm_slots > 0:
+        if screening.tier in ("low", "excluded"):
+            screening.suggested_route = "none"
+        elif dm_slots > 0:
             screening.suggested_route, dm_slots = "dm", dm_slots - 1
-        elif screening.tier in ("high", "medium") and comment_slots > 0:
+        elif comment_slots > 0:
             screening.suggested_route, comment_slots = "comment", comment_slots - 1
         else:
             screening.suggested_route = "none"

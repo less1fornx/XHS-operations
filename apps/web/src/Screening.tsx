@@ -25,6 +25,7 @@ type Screening = {
   tier: 'high' | 'medium' | 'low' | 'excluded'
   tier_reasons: string[]
   signals: Record<string, { value: SignalValue; evidence: string[] }>
+  recorded?: Record<string, string>
   latest_post_age_days: number | null
   suggested_route: Route
   content_angles: string[]
@@ -57,9 +58,10 @@ type BatchSummary = { id: string; status: string; shop_count: number; created_at
 
 type Decision = { route: Route; tier_feedback: 'agree' | 'disagree' | null; note: string }
 
-const tierLabel: Record<string, string> = { high: '高匹配', medium: '中匹配', low: '低匹配', excluded: '已排除' }
+// Rules v1 (2026-10-06): the tier says how early to look at a shop, never how likely it is to buy.
+const tierLabel: Record<string, string> = { high: '优先看', medium: '其次', low: '靠后', excluded: '不联系' }
 const tierBadge: Record<string, string> = { high: 'success', medium: 'warning', low: 'neutral', excluded: 'danger' }
-const signalLabel: Record<string, string> = { A_active: '活跃', B_fabric: '注重面料', C_high_price: '高客单价', D_store: '实体门店' }
+const signalLabel: Record<string, string> = { A_active: '近 30 天有更新', C_price: '价格看得见且够高', B_fabric: '注重面料', C_high_price: '高客单价', D_store: '实体门店' }
 const signalMark: Record<SignalValue, string> = { yes: '✓', no: '✗', unknown: '?' }
 const typeLabel: Record<string, string> = {
   suit_custom: '西装定制店', menswear: '成衣品牌 / 男装店', apparel_studio: '服装工作室', content_creator: '内容博主',
@@ -229,7 +231,7 @@ export default function ScreeningView({ onOpenWorkflow }: { onOpenWorkflow: () =
         </div>
         <p className="muted">
           共 {batch.results.length} 家：{(['high', 'medium', 'low', 'excluded'] as const).map((tier) => `${tierLabel[tier]} ${batch.ranked.filter((item) => item.screening?.tier === tier).length}`).join(' · ')} · 读取失败 {failed.length}。
-          今日剩余配额：私信 {batch.dm_slots}，评论 {batch.comment_slots}。分档由规则 {batch.ranked[0]?.screening?.rules_version || 'v0'} 计算，不是模型直接给出的名次。
+          今日剩余配额：私信 {batch.dm_slots}，评论 {batch.comment_slots}。先后顺序由规则 {batch.ranked[0]?.screening?.rules_version || 'v0'} 计算：先看能不能联系，再按“价格看得见且够高、最近有更新”排先后。它只是帮你决定先看谁，不代表成交的可能性。
         </p>
 
         {failed.length > 0 && <div className="failure-box">
@@ -259,7 +261,7 @@ export default function ScreeningView({ onOpenWorkflow }: { onOpenWorkflow: () =
               {!locked && s.tier !== 'excluded' && !e.xhs_id && <small className="id-hint">没读到小红书号，请对照主页填上（企业号在主页右上角“···”或分享里）。不填则按店名识别，可能认错。</small>}
               {!locked && !!e.xhs_id && !/^[A-Za-z0-9_.-]{4,30}$/.test(e.xhs_id) && <p className="unclear">这个小红书号的格式看起来不对，请对照截图核对。</p>}
               <div className="thumbs">{item.image_paths.map((path) => <a href={imageUrl(path)} target="_blank" rel="noreferrer" key={path}><img src={imageUrl(path)} alt="截图" onError={(event) => { event.currentTarget.replaceWith(Object.assign(document.createElement('span'), { className: 'muted', textContent: '原图已删除' })) }} /></a>)}</div>
-              <p className="reasons">{s.tier_reasons.join('；')}</p>
+              <ul className="reasons">{s.tier_reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
               {Object.keys(s.signals).length > 0 && <div className="signals">
                 {Object.entries(s.signals).map(([key, signal]) => <div className={`signal ${signal.value}`} key={key} title={signal.evidence.join('\n') || '截图里没有找到依据'}>
                   <span>{signalMark[signal.value]} {signalLabel[key] || key}</span>
@@ -267,13 +269,14 @@ export default function ScreeningView({ onOpenWorkflow }: { onOpenWorkflow: () =
                 </div>)}
               </div>}
               {s.tier !== 'excluded' && d && <div className="feedback tier-feedback">
-                  <span>判为“{tierLabel[s.tier]}”，你同意吗？</span>
+                  <span>排在“{tierLabel[s.tier]}”，你同意吗？</span>
                   <button type="button" disabled={locked} className={d.tier_feedback === 'agree' ? 'active' : ''} onClick={() => updateDecision(item.shop_key, { tier_feedback: 'agree' })}><Check size={13} />同意</button>
                   <button type="button" disabled={locked} className={d.tier_feedback === 'disagree' ? 'active' : ''} onClick={() => updateDecision(item.shop_key, { tier_feedback: 'disagree' })}><X size={13} />不同意</button>
                   {d.tier_feedback === 'disagree' && <input value={d.note} disabled={locked} onChange={(event) => updateDecision(item.shop_key, { note: event.target.value })} placeholder="一句话说明理由，例如：其实不讲究面料" />}
                 </div>}
               {s.signals.A_active?.value === 'unknown' && (e.pinned_post_dates?.length ?? 0) > 0 && <p className="unclear">截图里只看到置顶笔记，置顶不代表最近更新，活跃情况记为未知。可以补一张置顶下方的笔记列表截图</p>}
               {e.unclear_fields.length > 0 && <p className="unclear">看不清或截图里没有：{e.unclear_fields.join('、')}，请核对</p>}
+              {!!s.recorded && Object.keys(s.recorded).length > 0 && <details className="recorded"><summary>只记录、暂不影响先后的事实</summary><dl>{Object.entries(s.recorded).map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{value}</dd></div>)}</dl><small>这些会随发送一起存下来。等发得够多，再看哪一项和“对方有兴趣”有关。</small></details>}
               {s.content_angles.length > 0 && <ul className="angles">{s.content_angles.map((angle) => <li key={angle}>{angle}</li>)}</ul>}
               {s.tier !== 'excluded' && d && <footer>
                 <label>本次路线<select value={d.route} disabled={locked} onChange={(event) => updateDecision(item.shop_key, { route: event.target.value as Route })}><option value="dm">私信</option><option value="comment">评论</option><option value="none">这次不联系</option></select></label>

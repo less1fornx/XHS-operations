@@ -63,8 +63,27 @@ await step('提交一条意见，联系方式被隐去', async () => {
   const text = await page.locator('.note-item p').first().textContent(); expect(!text.includes('13800001111'), '电话没有被隐去'); return text
 })
 
-await step('批量初筛：两家店，一家读不出来', async () => {
+await step('排先后：标价够高的排最前，没有价格的其次并提示补图，最贵也不到门槛的不联系', async () => {
   await nav('批量初筛'); const inputs = page.locator('.panel input[type=file]')
+  await inputs.nth(0).setInputFiles(fixture('shop-cheap.png')); await inputs.nth(1).setInputFiles(fixture('shop-a.png')); await inputs.nth(2).setInputFiles(fixture('shop-priced.png'))
+  await page.click('text=开始初筛'); await page.waitForFunction(() => document.querySelectorAll('.shop-card').length === 3)
+  const cards = await page.locator('.shop-card').evaluateAll((items) => items.map((el) => ({ badge: el.querySelector('header .badge')?.textContent, text: el.textContent })))
+  expect(cards.map((c) => c.badge).join(',') === '优先看,其次,不联系', `顺序不对：${cards.map((c) => c.badge).join(',')}`)
+  expect(cards[0].text.includes('价格看得见且够高（最高 2999 元）'), '第一家没有写明价格依据')
+  expect(cards[1].text.includes('建议补一张带价格的截图'), '没有价格的店没有提示补图')
+  expect(cards[2].text.includes('看得到的最高价格 980 元，低于 1600 元'), '不联系的店没有写明原因')
+  expect(await page.locator('.shop-card >> nth=2 >> footer').count() === 0, '不联系的店不应该有路线选项')
+  return cards.map((c) => c.badge).join(' → ')
+})
+await step('卡片上有“只记录、暂不影响先后的事实”，文字没有被截断', async () => {
+  await page.locator('.shop-card >> nth=0 >> .recorded summary').click()
+  const facts = await page.locator('.shop-card >> nth=0 >> .recorded dt').allTextContents()
+  expect(['置顶笔记', '账号', '门店信息'].every((name) => facts.includes(name)), `缺少记录项：${facts.join(',')}`); await cutOffText('排先后结果')
+  await page.click('text=返回上传')
+})
+
+await step('批量初筛：两家店，一家读不出来', async () => {
+  const inputs = page.locator('.panel input[type=file]')
   await inputs.nth(0).setInputFiles(fixture('shop-a.png')); await inputs.nth(1).setInputFiles(fixture('unreadable.png'))
   await page.click('text=开始初筛'); await page.waitForSelector('.failure-box')
   expect(await page.locator('.shop-card').count() === 1 && await page.locator('.failure-row').count() === 1, '应为读成 1 家、失败 1 家')

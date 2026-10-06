@@ -128,6 +128,9 @@ class MockShopExtractor:
         first = Path(images[0][0]).stem
         if any("fail" in name or data.startswith(b"FAIL") for name, data in images):
             raise ProviderResponseError("截图识别失败: 模拟的识别错误")
+        # Walk-through fixtures can state a visible price: content starting with b"PRICE:2999".
+        head = images[0][1][:24].decode("ascii", "ignore")
+        price_mentions = [f"¥{head.split(':', 1)[1].strip().split()[0]}"] if head.startswith("PRICE:") else []
         extraction = self.fixtures.get(first) or ShopExtraction(
             shop_name=first,
             account_kind="personal",
@@ -135,7 +138,7 @@ class MockShopExtractor:
             bio_text=f"{first} 西装定制，全手工",
             followers_text="1200",
             location_text=None,
-            price_mentions=[],
+            price_mentions=price_mentions,
             fabric_mentions=["全麻衬"],
             high_end_mentions=["全手工"],
             store_mentions=["线下门店"],

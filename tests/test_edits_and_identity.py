@@ -75,7 +75,7 @@ def test_batch_duplicates_are_detected_by_id_not_name() -> None:
     ranked = rank_results(results, date(2026, 10, 3), lambda name, xhs_id="": False, 5, 3)
     tiers = {item["shop_key"]: item["screening"]["tier"] for item in ranked}
     assert list(tiers.values()).count("excluded") == 1
-    assert tiers["shop_同名店_222"] == "high"
+    assert tiers["shop_同名店_222"] != "excluded"
 
 
 def test_editing_an_approved_draft_is_recorded(tmp_path) -> None:
