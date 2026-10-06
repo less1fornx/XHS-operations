@@ -193,3 +193,10 @@ def test_sameness_separates_template_from_tailored() -> None:
     assert sameness(template) > 0.8
     assert sameness(tailored) < 0.1
     assert any("下了结论" in issue for issue in first_message_style_issues("这种轻结构对内搭的厚度要求很高。你们怎么配？"))
+
+
+def test_style_check_flags_a_wedding_opening() -> None:
+    from packages.agent_core.style import first_message_style_issues
+
+    draft = "看到贵店的新郎西服和备婚攻略。我们是做西装内搭的毛衫工厂，这类礼服客人一般怎么搭？"
+    assert any("婚礼" in issue for issue in first_message_style_issues(draft, "store_account"))

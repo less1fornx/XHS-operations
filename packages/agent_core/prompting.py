@@ -9,8 +9,8 @@ from .contracts import LeadAgentInput
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-PROMPT_VERSION = "lead-outreach-v7"
-SYSTEM_PROMPT_PATH = PROJECT_ROOT / "prompts" / "lead_outreach" / "v7" / "system.md"
+PROMPT_VERSION = "lead-outreach-v8"
+SYSTEM_PROMPT_PATH = PROJECT_ROOT / "prompts" / "lead_outreach" / "v8" / "system.md"
 
 
 @dataclass(frozen=True)

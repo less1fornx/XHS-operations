@@ -277,3 +277,18 @@ def test_missing_fields_become_blank_and_are_flagged() -> None:
     assert extraction.knitwear_present == "unknown"
     assert "面料（模型没有返回）" in extraction.unclear_fields
     assert "店铺名称（模型没有返回）" not in extraction.unclear_fields
+
+
+def test_wedding_only_shop_goes_last_and_mixed_shop_is_not_penalised() -> None:
+    # User 2026-10-06: wedding suits are worn with shirts, which we do not make.
+    base = dict(price_mentions=["¥2999"], recent_post_dates=["昨天"])
+    wedding = screen_shop(shop(**base, wedding_mentions=["新郎西服", "备婚攻略"]), TODAY)
+    both = screen_shop(shop(**base, wedding_mentions=["婚礼宴会"], daily_mentions=["商务休闲"]), TODAY)
+    daily = screen_shop(shop(**base, daily_mentions=["通勤", "休闲西装"]), TODAY)
+    unknown = screen_shop(shop(**base), TODAY)
+    one_hint = screen_shop(shop(**base, wedding_mentions=["婚礼宴会"]), TODAY)
+
+    assert wedding.tier == "low" and any("婚礼一般配衬衫" in reason for reason in wedding.tier_reasons)
+    assert both.tier == daily.tier == unknown.tier == "high"
+    assert one_hint.tier == "high"          # a single wedding word is not enough to demote
+    assert wedding.signals["E_scene"].value == "no" and both.signals["E_scene"].value == "yes"

@@ -35,6 +35,9 @@ def first_message_style_issues(draft: str, audience: str = "unknown") -> list[st
         issues.append("用了放在谁身上都成立的夸奖：" + "、".join(generic))
     if _PRESUMPTION.search(text):
         issues.append("替对方下了结论（“对内搭要求很高”这类话每家店都能套）")
+    wedding = [word for word in ("婚礼", "新郎", "礼服", "备婚", "伴郎", "婚宴", "结婚") if word in text]
+    if wedding:
+        issues.append("从婚礼场景切入（婚礼配衬衫，我们不做）：" + "、".join(wedding))
     if "想请教" in text:
         issues.append("结尾用了固定起句“想请教下”")
     limit = LENGTH_LIMIT.get(audience, LENGTH_LIMIT["unknown"])

@@ -19,8 +19,8 @@ from .outcomes import ASK_TAGS, scrub_contact_info
 from .screening import ShopExtraction, trim_model_output
 
 
-SHOP_EXTRACTION_PROMPT_VERSION = "shop-extraction-v1"
-SHOP_EXTRACTION_PROMPT_PATH = PROJECT_ROOT / "prompts" / "shop_extraction" / "v1" / "system.md"
+SHOP_EXTRACTION_PROMPT_VERSION = "shop-extraction-v2"
+SHOP_EXTRACTION_PROMPT_PATH = PROJECT_ROOT / "prompts" / "shop_extraction" / "v2" / "system.md"
 
 Image = tuple[str, bytes]  # (file name, content)
 

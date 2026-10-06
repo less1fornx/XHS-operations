@@ -61,7 +61,7 @@ type Decision = { route: Route; tier_feedback: 'agree' | 'disagree' | null; note
 // Rules v1 (2026-10-06): the tier says how early to look at a shop, never how likely it is to buy.
 const tierLabel: Record<string, string> = { high: '优先看', medium: '其次', low: '靠后', excluded: '不联系' }
 const tierBadge: Record<string, string> = { high: 'success', medium: 'warning', low: 'neutral', excluded: 'danger' }
-const signalLabel: Record<string, string> = { A_active: '近 30 天有更新', C_price: '价格看得见且够高', B_fabric: '注重面料', C_high_price: '高客单价', D_store: '实体门店' }
+const signalLabel: Record<string, string> = { A_active: '近 30 天有更新', C_price: '价格看得见且够高', E_scene: '日常穿着（不是只做婚礼）', B_fabric: '注重面料', C_high_price: '高客单价', D_store: '实体门店' }
 const signalMark: Record<SignalValue, string> = { yes: '✓', no: '✗', unknown: '?' }
 const typeLabel: Record<string, string> = {
   suit_custom: '西装定制店', menswear: '成衣品牌 / 男装店', apparel_studio: '服装工作室', content_creator: '内容博主',

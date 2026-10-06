@@ -53,6 +53,7 @@ _BLANK_VALUES: dict[str, object] = {
     "knitwear_present": "unknown", "price_mentions": [], "fabric_mentions": [],
     "high_end_mentions": [], "store_mentions": [], "recent_post_dates": [],
     "pinned_post_dates": [], "content_topics": [], "unclear_fields": [],
+    "wedding_mentions": [], "daily_mentions": [],
 }
 _FIELD_NAMES_ZH = {
     "shop_name": "店铺名称", "bio_text": "简介", "account_kind": "账号类型", "shop_type": "店铺类型",
@@ -102,6 +103,10 @@ class ShopExtraction(StrictModel):
     pinned_post_dates: list[str] = Field(default_factory=list, max_length=10)
     content_topics: list[str] = Field(max_length=20)
     knitwear_present: SignalValue
+    # Verbatim wording about occasions. Wedding suits are worn with shirts, which we
+    # do not make, so a wedding-only shop is a poor fit (user 2026-10-06).
+    wedding_mentions: list[str] = Field(default_factory=list, max_length=10)
+    daily_mentions: list[str] = Field(default_factory=list, max_length=10)
     unclear_fields: list[str] = Field(max_length=20)
 
     @field_validator("shop_type", mode="before")
@@ -234,6 +239,22 @@ def _excluded(reason: str, recorded: dict[str, str] | None = None) -> ShopScreen
     )
 
 
+SCENE_NAMES_ZH = {"wedding": "主要做婚礼西装", "daily": "日常为主", "both": "婚礼和日常都做", "unknown": "看不出来"}
+
+
+def main_scene(extraction: ShopExtraction) -> str:
+    """Decided by the program from the copied wording, not guessed by the model.
+    Wedding-only needs clear evidence: at least two wedding mentions and no daily one."""
+    wedding, daily = len(extraction.wedding_mentions), len(extraction.daily_mentions)
+    if wedding and daily:
+        return "both"
+    if daily:
+        return "daily"
+    if wedding >= 2:
+        return "wedding"
+    return "unknown"
+
+
 def recorded_facts(extraction: ShopExtraction) -> dict[str, str]:
     stores = len(extraction.store_mentions)
     return {
@@ -283,7 +304,17 @@ def screen_shop(extraction: ShopExtraction, today: date) -> ShopScreening:
         else (f"最近 {latest} 天前更新" if latest <= STALE_AFTER_DAYS else f"最近一次更新在 {latest} 天前，超过 3 个月，消息可能没人看")
     )
 
-    if latest is not None and latest > STALE_AFTER_DAYS:
+    scene = main_scene(extraction)
+    if scene == "wedding":
+        reasons.append("主要做婚礼西装：婚礼一般配衬衫，我们不提供，排在后面（依据：" + "、".join(extraction.wedding_mentions[:3]) + "）")
+    elif scene != "unknown":
+        reasons.append(SCENE_NAMES_ZH[scene])
+    signals["E_scene"] = Signal(
+        value={"wedding": "no", "daily": "yes", "both": "yes", "unknown": "unknown"}[scene],
+        evidence=(extraction.daily_mentions + extraction.wedding_mentions)[:5],
+    )
+
+    if scene == "wedding" or (latest is not None and latest > STALE_AFTER_DAYS):
         tier: Tier = "low"
     elif is_suit_shop and price_ok and latest is not None and latest <= ACTIVE_WITHIN_DAYS:
         tier = "high"
@@ -377,6 +408,11 @@ def to_lead_context(extraction: ShopExtraction, screening: ShopScreening) -> dic
     signal_lines = []
     if extraction.fabric_mentions:
         signal_lines.append("内容涉及面料：" + "；".join(extraction.fabric_mentions[:5]))
+    scene = main_scene(extraction)
+    if scene != "unknown":
+        signal_lines.append(f"穿着场景：{SCENE_NAMES_ZH[scene]}")
+    if extraction.daily_mentions:
+        signal_lines.append("日常相关内容：" + "；".join(extraction.daily_mentions[:5]))
     if extraction.knitwear_present == "yes":
         signal_lines.append("内容中已出现针织或内搭")
     elif extraction.knitwear_present == "no":

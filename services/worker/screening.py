@@ -8,7 +8,7 @@ from pathlib import Path
 
 from packages.agent_core.providers import ProviderResponseError
 from packages.agent_core.screening import NotShopPageError, ShopExtraction
-from packages.agent_core.vision import ShopExtractor, extraction_prompt_sha256
+from packages.agent_core.vision import SHOP_EXTRACTION_PROMPT_VERSION, ShopExtractor, extraction_prompt_sha256
 from services.api.app.storage import RunStore
 from packages.workflows.screening_workflow import ShopInput, classify_error
 
@@ -43,7 +43,7 @@ def make_read_shop(store: RunStore, extractor: ShopExtractor):
                 store.record_model_invocation(
                     **common,
                     status="failed",
-                    prompt_version="shop-extraction-v1",
+                    prompt_version=SHOP_EXTRACTION_PROMPT_VERSION,
                     error_type=type(exc.__cause__).__name__ if exc.__cause__ else "ProviderResponseError",
                     error_message=str(exc),
                 )
