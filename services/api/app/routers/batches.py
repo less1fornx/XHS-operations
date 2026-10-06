@@ -21,6 +21,7 @@ from ..runtime import (  # noqa: E402
     read_shop,
     batch_graph,
     batch_lock,
+    shop_extractor,
     ALLOWED_IMAGE_TYPES,
     MAX_IMAGE_BYTES,
 )
@@ -31,6 +32,8 @@ from packages.agent_core.screening import (  # noqa: E402
     today_in_shanghai,
 )
 from services.worker.screening import UPLOAD_ROOT, purge_old_uploads  # noqa: E402
+from services.worker.inbox import DONE_DIR, batch_stamp, inbox_dir, list_pending, move_into, plan_import  # noqa: E402
+from packages.agent_core.vision import identify_screenshot  # noqa: E402
 from packages.workflows.screening_workflow import classify_error, rank_results  # noqa: E402
 from ..flows.run_flow import (  # noqa: E402
     Channel,
@@ -96,6 +99,11 @@ async def create_batch(request: Request) -> dict[str, Any]:
     if not shops:
         raise HTTPException(status_code=409, detail="no_images: 请至少为一家店上传截图")
 
+    return run_new_batch(batch_id, shops)
+
+
+def run_new_batch(batch_id: str, shops: list[dict[str, Any]]) -> dict[str, Any]:
+    """Read, rank and save a batch whose screenshots are already in the upload folder."""
     summary = store.account_summary()
     initial = {
         "batch_id": batch_id,
@@ -110,6 +118,78 @@ async def create_batch(request: Request) -> dict[str, Any]:
     payload = batch_payload(batch_id, {**state, "created_at": datetime.now().isoformat()})
     store.save_batch(batch_id, payload["status"], payload)
     return payload
+
+
+def _inbox_state() -> tuple[Path | None, str]:
+    root = inbox_dir()
+    if root is None:
+        return None, "not_configured"
+    try:
+        return (root, "ready") if root.is_dir() else (root, "unreachable")
+    except OSError:
+        return root, "unreachable"
+
+
+@router.get("/api/inbox")
+def inbox_status() -> dict[str, Any]:
+    """How many new screenshots wait in the shared folder. Reads file names only, no model call."""
+    root, state = _inbox_state()
+    if state != "ready":
+        return {"state": state, "path": str(root) if root else None, "pending": 0, "names": []}
+    try:
+        files = list_pending(root)
+    except OSError:
+        return {"state": "unreachable", "path": str(root), "pending": 0, "names": []}
+    names = [str(f.relative_to(root)) for f in files]
+    return {"state": "ready", "path": str(root), "pending": len(files), "names": names[:30]}
+
+
+@router.post("/api/inbox/import")
+def import_inbox() -> dict[str, Any]:
+    """Sort the waiting screenshots into shops, screen them as one batch, then file the originals away."""
+    root, state = _inbox_state()
+    if state == "not_configured":
+        raise HTTPException(status_code=409, detail="inbox_not_configured: 还没有设置截图文件夹")
+    if state != "ready":
+        raise HTTPException(status_code=409, detail=f"inbox_unreachable: 截图文件夹连不上（{root}）。请确认共享盘已经连接。")
+    files = list_pending(root)
+    if not files:
+        raise HTTPException(status_code=409, detail="inbox_empty: 截图文件夹里没有新的截图")
+
+    def identify(file: Path) -> Any:
+        return identify_screenshot(shop_extractor, (file.name, file.read_bytes()))
+
+    plan = plan_import(root, files, identify)
+    stamp = batch_stamp()
+    skipped = []
+    for item in plan.skipped:
+        if item["move_to"]:
+            move_into(root, item["file"], item["move_to"])
+        skipped.append({"name": item["file"].name, "reason": item["reason"]})
+    if not plan.groups:
+        return {"batch": None, "skipped": skipped, "waiting": plan.waiting, "groups": []}
+
+    batch_id = str(uuid4())
+    folder = UPLOAD_ROOT / batch_id
+    folder.mkdir(parents=True, exist_ok=True)
+    shops, groups = [], []
+    for index, group in enumerate(plan.groups):
+        paths = []
+        for number, source in enumerate(group["files"]):
+            # Local copies follow the 10-day retention rule; the shared folder keeps the originals.
+            target = folder / f"shop_{index}_{number}{source.suffix.lower()}"
+            target.write_bytes(source.read_bytes())
+            paths.append(str(target))
+        shops.append({"batch_id": batch_id, "shop_key": f"shop_{index}", "image_paths": paths})
+        groups.append({"shop_key": f"shop_{index}", "label": group["label"], "images": len(group["files"]), "unused": len(group["unused"])})
+    payload = run_new_batch(batch_id, shops)
+    payload["inbox"] = {"groups": groups, "stamp": stamp}
+    store.save_batch(batch_id, payload["status"], payload)
+    # File the originals away only after the batch is safely saved.
+    for group in plan.groups:
+        for source in [*group["files"], *group["unused"]]:
+            move_into(root, source, DONE_DIR, stamp)
+    return {"batch": payload, "skipped": skipped, "waiting": plan.waiting, "groups": groups}
 
 
 @router.get("/api/batches/{batch_id}")

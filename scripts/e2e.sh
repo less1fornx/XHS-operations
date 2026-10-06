@@ -14,6 +14,7 @@ done
 rm -rf "$WORK"; mkdir -p "$WORK/uploads"
 export AGENT_RUN_DB_PATH="$WORK/ops.db" AGENT_CHECKPOINT_DB_PATH="$WORK/checkpoints.sqlite" AGENT_UPLOAD_DIR="$WORK/uploads"
 export AGENT_ERROR_LOG="$WORK/api-errors.log" AGENT_LLM_PROVIDER=mock AGENT_ACCESS_CODE=""
+mkdir -p "$WORK/inbox"; export AGENT_INBOX_DIR="$WORK/inbox" E2E_INBOX_DIR="$WORK/inbox"
 uv run alembic upgrade head >"$WORK/migrate.log" 2>&1 || { echo "建库失败，见 $WORK/migrate.log"; exit 2; }
 PYTHONPATH=. .venv/bin/uvicorn services.api.app.main:app --host 127.0.0.1 --port "$API_PORT" >"$WORK/api.log" 2>&1 & API_PID=$!
 (cd apps/web && VITE_API_URL="http://127.0.0.1:$API_PORT" npx vite --host 127.0.0.1 --port "$WEB_PORT" --strictPort >"$WORK/web.log" 2>&1) & WEB_PID=$!

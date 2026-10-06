@@ -40,6 +40,7 @@ def batch_payload(batch_id: str, state: dict[str, Any]) -> dict[str, Any]:
         "ranked": state.get("ranked", []),
         "review": state.get("review"),
         "drafts": state.get("drafts", []),
+        "inbox": state.get("inbox"),
     }
 
 

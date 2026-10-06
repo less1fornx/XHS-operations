@@ -281,3 +281,59 @@ def read_reply(extractor: ShopExtractor, images: list[Image]) -> ReplyResult:
         body.get("usage") or {},
         round((time.perf_counter() - started) * 1000),
     )
+
+
+# --- Sorting loose screenshots: which page, whose account --------------------------
+
+TRIAGE_PROMPT_VERSION = "screenshot-triage-v1"
+TRIAGE_PROMPT_PATH = PROJECT_ROOT / "prompts" / "screenshot_triage" / "v1" / "system.md"
+
+
+class ScreenshotTriage(StrictModel):
+    page_kind: Literal["profile", "note_list", "note_detail", "search_results", "dm_conversation", "other"]
+    account_name: str = Field(default="", max_length=200)
+    xhs_id: str | None = Field(default=None, max_length=100)
+    summary: str = Field(default="", max_length=300)
+
+    @model_validator(mode="before")
+    @classmethod
+    def trim_to_limits(cls, data: object) -> object:
+        return trim_model_output(cls, data)
+
+
+def identify_screenshot(extractor: ShopExtractor, image: Image) -> ScreenshotTriage:
+    """One cheap call per loose screenshot: what page is it and whose account is it."""
+    if isinstance(extractor, MockShopExtractor):
+        # Walk-through fixtures say what they are: b"SHOP:<name>", b"SEARCH", b"DM".
+        head = image[1][:80].decode("utf-8", "ignore")
+        if "fail" in image[0] or head.startswith("FAIL"):
+            raise ProviderResponseError("截图识别失败: 模拟的识别错误")
+        if head.startswith("SEARCH"):
+            return ScreenshotTriage(page_kind="search_results", summary="搜索结果页")
+        if head.startswith("DM"):
+            return ScreenshotTriage(page_kind="dm_conversation", summary="私信对话界面")
+        if head.startswith("SHOP:"):
+            return ScreenshotTriage(page_kind="profile", account_name=head[5:].split("|")[0].strip(), summary="账号主页")
+        return ScreenshotTriage(page_kind="other", summary="认不出是什么页面")
+    assert isinstance(extractor, QwenShopExtractor)
+    payload = {
+        "model": extractor.model_name,
+        "messages": [
+            {"role": "system", "content": TRIAGE_PROMPT_PATH.read_text(encoding="utf-8")},
+            {"role": "user", "content": [*_image_parts([image]), {"type": "text", "text": "这张截图是什么页面，属于哪个账号？"}]},
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "screenshot_triage", "strict": True, "schema": ScreenshotTriage.model_json_schema()},
+        },
+        "enable_thinking": False,
+        "temperature": 0,
+    }
+    try:
+        response = extractor._client.post(
+            f"{extractor.base_url}/chat/completions", headers=extractor._headers, json=payload
+        )
+        response.raise_for_status()
+        return ScreenshotTriage.model_validate_json(response.json()["choices"][0]["message"]["content"])
+    except (httpx.HTTPError, KeyError, TypeError, ValueError, ValidationError) as exc:
+        raise ProviderResponseError(f"截图识别失败: {exc}") from exc

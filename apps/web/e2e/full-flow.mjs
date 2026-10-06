@@ -2,7 +2,7 @@
 // Run with scripts/e2e.sh. Each step is something the user does; a failing step names itself.
 // When the user finds a problem this did not catch, add the step that would have caught it.
 import { chromium } from 'playwright-core'
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, utimesSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -61,6 +61,25 @@ await step('进度与反馈：六个环节都显示', async () => {
 await step('提交一条意见，联系方式被隐去', async () => {
   await page.fill('.feedback-form textarea', '检查用意见，电话13800001111'); await page.click('text=提交意见'); await page.waitForSelector('.note-item')
   const text = await page.locator('.note-item p').first().textContent(); expect(!text.includes('13800001111'), '电话没有被隐去'); return text
+})
+
+const INBOX = process.env.E2E_INBOX_DIR || ''
+const drop = (name, content) => {      // a screenshot saved a moment ago by someone browsing
+  const file = join(INBOX, name); mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, content)
+  const past = new Date(Date.now() - 60_000); utimesSync(file, past, past)
+}
+await step('截图文件夹：不上传、不改名，系统自己认出哪几张是同一家', async () => {
+  expect(INBOX, '没有配置截图文件夹')
+  drop('截屏 10.01.png', 'SHOP:甲店'); drop('截屏 10.02.png', 'SHOP:甲 店'); drop('乙店-1.png', 'PRICE:2999'); drop('丙店/随便.png', 'x'); drop('截屏 10.05.png', 'SEARCH'); drop('截屏 10.06.png', 'DM')
+  await nav('批量初筛'); await page.waitForSelector('.inbox-panel .badge:has-text("6 张新截图")', { timeout: 15000 })
+  await page.click('.inbox-panel .primary-button'); await page.waitForFunction(() => document.querySelectorAll('.shop-card').length === 3, null, { timeout: 60000 })
+  const notes = await page.locator('.inbox-notes').innerText()
+  expect(notes.includes('搜索结果页') && notes.includes('私信截图不在这里读取'), `没有说明被跳过的截图：${notes}`)
+  expect(readdirSync(INBOX).sort().join(',') === '已读取,搜索结果,没认出来', `文件夹里应该只剩三个结果文件夹：${readdirSync(INBOX).join(',')}`)
+  const done = readdirSync(join(INBOX, '已读取')).flatMap((stamp) => readdirSync(join(INBOX, '已读取', stamp)))
+  expect(done.length === 4 && existsSync(join(INBOX, '搜索结果', '截屏 10.05.png')), `原图没有按结果归档：${done.join(',')}`)
+  await cutOffText('文件夹读取结果'); await page.click('text=返回上传')
+  await page.waitForSelector('.inbox-panel .badge:has-text("0 张新截图")'); expect(await page.locator('.inbox-panel .primary-button').isDisabled(), '没有新截图时按钮应该不可点')
 })
 
 await step('排先后：标价够高的排最前，没有价格的其次并提示补图，最贵也不到门槛的不联系', async () => {
