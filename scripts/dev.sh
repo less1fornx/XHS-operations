@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Start the API and the web UI together. Ctrl+C stops both.
 #
-#   ./scripts/dev.sh                        # API on 8000, web on 5173
+#   ./scripts/dev.sh                        # API on 8000, web on 5173, reachable from this network
 #   API_PORT=8001 WEB_PORT=5174 ./scripts/dev.sh
-#   LAN=1 ./scripts/dev.sh                  # also reachable from other devices on this network
+#   LAN=0 ./scripts/dev.sh                  # this machine only
+#
+# Other devices on the same network can open the page by default (user decision
+# 2026-10-06). They must enter the access code; this machine never needs it.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -14,19 +17,20 @@ NODE_HOME="${NODE_HOME:-$HOME/.local/node/node-v24.21.0-darwin-arm64}"
 WEB_DIR="${WEB_DIR:-$ROOT/apps/web}"
 HOST="127.0.0.1"
 LAN_IP=""
-if [ "${LAN:-0}" = "1" ]; then
-  HOST="0.0.0.0"
+if [ "${LAN:-1}" = "1" ]; then
   LAN_IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)"
   if [ -z "$LAN_IP" ]; then
-    echo "没有找到局域网地址，请确认电脑已连接 Wi-Fi 或网线。" >&2
-    exit 1
+    # Offline is not an error now that sharing is the default: just stay local.
+    echo "没有找到局域网地址（电脑没有连 Wi-Fi 或网线），这次只在本机可用。"
+  else
+    HOST="0.0.0.0"
+    # A fixed code can live in .env; otherwise a new one is generated on every start.
+    if [ -z "${AGENT_ACCESS_CODE:-}" ] && [ -f "$ROOT/.env" ]; then
+      AGENT_ACCESS_CODE="$(sed -n 's/^AGENT_ACCESS_CODE=//p' "$ROOT/.env" | tail -1 | tr -d '[:space:]')"
+    fi
+    # Other devices must enter this code.
+    export AGENT_ACCESS_CODE="${AGENT_ACCESS_CODE:-$(printf '%06d' $(( (RANDOM * 32768 + RANDOM) % 1000000 )))}"
   fi
-  # A fixed code can live in .env; otherwise a new one is generated on every start.
-  if [ -z "${AGENT_ACCESS_CODE:-}" ] && [ -f "$ROOT/.env" ]; then
-    AGENT_ACCESS_CODE="$(sed -n 's/^AGENT_ACCESS_CODE=//p' "$ROOT/.env" | tail -1 | tr -d '[:space:]')"
-  fi
-  # Other devices must enter this code.
-  export AGENT_ACCESS_CODE="${AGENT_ACCESS_CODE:-$(printf '%06d' $(( (RANDOM * 32768 + RANDOM) % 1000000 )))}"
 fi
 
 # lsof exits non-zero when the port is free; that must not stop the script.
@@ -105,6 +109,8 @@ if [ -n "$LAN_IP" ]; then
   echo
   echo "同一网络下的其他设备打开： http://$LAN_IP:$WEB_PORT"
   echo "访问码： $AGENT_ACCESS_CODE   （其他设备第一次打开时输入；本机不需要）"
-  echo "只在可信的网络下使用（家里或办公室），不要在公共 Wi-Fi 下开启。"
+  echo "只在可信的网络下使用（家里或办公室）。在公共 Wi-Fi 下请改用： LAN=0 $0"
+else
+  echo "其他设备无法访问（只限本机）。"
 fi
 wait
