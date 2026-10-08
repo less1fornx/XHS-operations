@@ -29,6 +29,7 @@ from packages.agent_core.outcomes import (  # noqa: E402
     OUTCOME_RULES_VERSION,
     REPLY_WINDOW_DAYS,
     STAGES,
+    FOLLOW_UP_STAGE,
     keeps_do_not_contact,
     reply_timing,
     scrub_contact_info,
@@ -109,7 +110,11 @@ class ReplyRecord(BaseModel):
             raise ValueError(f"未知的标签: {', '.join(unknown)}")
         if self.replied and self.stage == "no_reply":
             raise ValueError("对方已回复时，阶段不能是未回复")
-        if not self.replied and self.stage != "no_reply":
+        if self.stage == FOLLOW_UP_STAGE:
+            if not (self.note or "").strip():
+                raise ValueError("选“需要我跟进”时，请写一句要跟进什么")
+            self.replied = False          # not counted as a reply until a real one is recorded
+        elif not self.replied and self.stage != "no_reply":
             raise ValueError("对方没有回复时，阶段只能是未回复")
         return self
 
@@ -138,8 +143,10 @@ def record_reply(run_id: str, payload: ReplyRecord) -> dict[str, Any]:
             ask_tags=payload.ask_tags,
             reply_text=scrub_contact_info(payload.reply_text) if payload.reply_text else None,
             replied_at=replied_at,
-            note=payload.note,
-            keep_do_not_contact=keeps_do_not_contact(payload.replied, payload.stage, payload.ask_tags),
+            note=scrub_contact_info(payload.note) if payload.note else None,
+            follow_up=payload.stage == FOLLOW_UP_STAGE,
+            keep_do_not_contact=payload.stage != FOLLOW_UP_STAGE
+            and keeps_do_not_contact(payload.replied, payload.stage, payload.ask_tags),
             timing_fn=reply_timing,
         )
     except BusinessRuleError as exc:

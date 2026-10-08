@@ -105,6 +105,8 @@ const filterStages: Record<ListFilter, string[] | null> = {
   done: ['replied', 'failed', 'read_no_reply', 'blocked'],
   all: null,
 }
+// Sent, but the human marked it as needing a follow-up (user 2026-10-08).
+const needsFollowUp = (run: { stage: string; state: { reply?: { follow_up?: boolean } } }) => run.stage === 'sent' && !!run.state.reply?.follow_up
 const filterLabel: Record<ListFilter, string> = { todo: '待处理', sending: '待发送', waiting: '等回复', done: '已结束', all: '全部' }
 const steps = ['选路线', '审文案', '去发送', '记结果']
 const stepIndex: Record<string, number> = { route_review: 0, content_review: 1, scheduled: 2, opened: 2, sent: 3, failed: 3, replied: 4, read_no_reply: 4, blocked: 4 }
@@ -180,12 +182,12 @@ function App() {
   const selected = useMemo(() => runs.find((run) => run.id === selectedId) || null, [runs, selectedId])
   const counts = useMemo(() => {
     const result = { todo: 0, sending: 0, waiting: 0, done: 0, all: runs.length } as Record<ListFilter, number>
-    for (const run of runs) for (const key of ['todo', 'sending', 'waiting', 'done'] as ListFilter[]) if (filterStages[key]!.includes(run.stage)) result[key] += 1
+    for (const run of runs) for (const key of ['todo', 'sending', 'waiting', 'done'] as ListFilter[]) if (filterStages[key]!.includes(run.stage) || (key === 'todo' && needsFollowUp(run))) result[key] += 1
     return result
   }, [runs])
   const visibleRuns = useMemo(() => {
     const stages = filterStages[filter]
-    return stages ? runs.filter((run) => stages.includes(run.stage)) : runs
+    return stages ? runs.filter((run) => stages.includes(run.stage) || (filter === 'todo' && needsFollowUp(run))) : runs
   }, [runs, filter])
 
   const refresh = async () => {
@@ -394,6 +396,7 @@ function App() {
   const openStages = ['route_review', 'content_review', 'scheduled', 'opened']
   const frozen = summary?.status === 'frozen'
   const listHint = (run: Run) => {
+    if (needsFollowUp(run)) return `等你跟进：${run.state.reply?.follow_up_note || ''}`
     if (run.stage === 'route_review') return run.state.model_status === 'failed' ? '模型调用失败，需人工选路线' : `模型建议：${channelLabel[run.state.suggested_channel || 'none']}`
     if (run.stage === 'opened') return `${channelLabel[run.state.channel || 'none']} · 页面已打开，等你确认是否发出`
     if (run.stage === 'sent') return `${channelLabel[run.state.channel || 'none']} · 等对方回复`
@@ -575,8 +578,8 @@ function App() {
                 {selected.stage === 'sent' && <div className="status-card ok"><Check size={18} /><div><strong>已发送，等对方回复</strong><p>对方回复后回到这里记录。记录的内容会用来分析什么样的店、什么样的文案更容易得到回复。</p></div></div>}
                 {selected.stage === 'read_no_reply' && <div className="status-card neutral"><ShieldCheck size={18} /><div><strong>未回复，已加入勿扰名单</strong><p>{selected.state.result_note} 如果对方之后又回复了，仍然可以在下面记录，这家店会移出勿扰名单。</p></div></div>}
                 {finalText}
-                <ReplyPanel run={selected} busy={busy} onSave={(action) => { void runAction(action).then((next) => { if (next) setFilter(next.stage === 'sent' ? 'waiting' : 'done') }) }} onError={setError} />
-                {selected.stage === 'sent' && <button className="link-button danger" type="button" disabled={busy} onClick={() => recordResult('failed', '人工反馈：发送后出现异常')}>发送后出现异常（例如被平台限制），点这里记录</button>}
+                <ReplyPanel run={selected} busy={busy} onSave={(action) => { void runAction(action).then((next) => { if (next) setFilter(needsFollowUp(next) ? 'todo' : next.stage === 'sent' ? 'waiting' : 'done') }) }} onError={setError} />
+                {selected.stage === 'sent' && <button className="link-button danger" type="button" disabled={busy} onClick={() => { if (window.confirm('确定记录为“发送后出现异常”吗？\n这会让账号进入降级状态，当天的名额会减少。只是对方自动回复、或点错了，请点取消。')) recordResult('failed', '人工反馈：发送后出现异常') }}>发送后出现异常（例如被平台限制），点这里记录</button>}
               </div>}
 
               {(selected.stage === 'failed' || selected.stage === 'blocked') && <div className="decision-content"><div className="status-card neutral"><AlertTriangle size={18} /><div><strong>{selected.stage === 'failed' ? '已记录发送异常' : '任务已结束，不会联系这家店铺'}</strong><p>{selected.state.result_note || '被策略检查拦截，详情见“风险记录”。'}</p></div></div>{finalText}</div>}

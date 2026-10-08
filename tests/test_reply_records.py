@@ -168,3 +168,19 @@ def test_reply_records_join_snapshot_and_outcome(tmp_path) -> None:
 
     assert rows[0]["tier"] == "high"
     assert rows[0]["outcome"]["stage"] == "wants_info"
+
+
+def test_follow_up_keeps_waiting_and_is_not_counted_as_a_reply(tmp_path) -> None:
+    store = make_store(tmp_path)
+    sent_run(store)
+    run_id = "run-1"
+    payload = record(store, replied=False, stage="needs_followup", ask_tags=["auto_reply"],
+                     reply_text="您好，欢迎咨询", note="对方是自动回复，明天再发一条",
+                     keep_do_not_contact=False, follow_up=True)
+    assert payload["stage"] == "sent"                      # still waiting; the 15-day rule keeps running
+    reply = payload["state"]["reply"]
+    assert reply["follow_up"] and not reply["replied"] and reply["follow_up_note"]
+    assert run_id in store.unanswered_runs(days=0)
+    # A real reply later replaces it and counts from then on.
+    later = record(store, stage="wants_info", ask_tags=["price"])
+    assert later["stage"] == "replied" and not later["state"]["reply"]["follow_up"]

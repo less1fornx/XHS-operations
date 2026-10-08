@@ -69,6 +69,7 @@ def collect(db_path: Path = DEFAULT_DB, eval_cases: Path = EVAL_CASES) -> dict[s
             "or stage in ('replied_no_intent','lost'))"
         )
         no_reply = one("select count(*) from outreach_outcomes where stage='no_reply'")
+        follow_up = one("select count(*) from outreach_outcomes where stage='needs_followup'")
         model_calls = dict(conn.execute("select status, count(*) from model_invocations group by 1"))
         # Read reasons where they are always written: the audit trail for ended tasks
         # (written at every stage) and the task state for edits (review-time and later).
@@ -109,7 +110,7 @@ def collect(db_path: Path = DEFAULT_DB, eval_cases: Path = EVAL_CASES) -> dict[s
         "draft": {"approved": drafts_approved, "unedited": drafts_unedited, "later_edits": later_edits,
                   "draft_unedited_rate": _rate(drafts_unedited, drafts_approved)},
         "send": {"sent": sent, "sent_before_snapshots": max(sent_before_snapshots - sent, 0)},
-        "reply": {"replied": replied, "declined": declined, "no_reply": no_reply,
+        "reply": {"replied": replied, "declined": declined, "no_reply": no_reply, "follow_up": follow_up,
                   "reply_rate": _rate(replied, replied + no_reply),
                   # An effective conversation: they replied with something other than a refusal
                   # (asked a question, wanted material). The near-term goal (user 2026-10-06).
@@ -166,7 +167,7 @@ def stage_rows(stats: dict[str, Any]) -> list[dict[str, Any]]:
          "detail": f"已发送 {send['sent']} 家", **counted(send["sent"], MIN_SENT)},
         {"key": "reply", "label": "记录回复", "measure": "有效对话的家数（近期目标）和有结果记录的家数",
          "how": "候选工作流的“等回复”分组里：对方回复后上传私信截图或粘贴原话，选阶段。", "view": "workflow",
-         "detail": f"有效对话 {reply['effective']} 家；回复了但拒绝 {reply['declined']} 家；未回复 {reply['no_reply']} 家",
+         "detail": f"有效对话 {reply['effective']} 家；回复了但拒绝 {reply['declined']} 家；未回复 {reply['no_reply']} 家；等你跟进 {reply['follow_up']} 家",
          **counted(reply["replied"] + reply["no_reply"], MIN_SENT)},
         {"key": "eval", "label": "评测集", "measure": "真正考模型的题数",
          "how": "攒够真实店铺后，由你挑有代表性的，告诉 Claude 每家的预期。", "view": None,

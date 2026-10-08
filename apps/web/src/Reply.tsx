@@ -14,6 +14,8 @@ type Options = {
 export type ReplyState = {
   replied: boolean
   stage: string
+  follow_up?: boolean
+  follow_up_note?: string | null
   ask_tags: string[]
   reply_text?: string | null
   replied_at?: string | null
@@ -38,7 +40,7 @@ export default function ReplyPanel<Run extends { id: string; stage: string; stat
 }) {
   const existing = run.state.reply
   const [options, setOptions] = useState<Options | null>(null)
-  const [stage, setStage] = useState(existing?.replied ? existing.stage : '')
+  const [stage, setStage] = useState(existing?.replied || existing?.follow_up ? existing.stage : '')
   const [tags, setTags] = useState<string[]>(existing?.ask_tags || [])
   const [text, setText] = useState(existing?.reply_text || '')
   const [repliedAt, setRepliedAt] = useState(existing?.replied_at ? localInput(new Date(existing.replied_at)) : localInput(new Date()))
@@ -49,7 +51,7 @@ export default function ReplyPanel<Run extends { id: string; stage: string; stat
 
   useEffect(() => { api<Options>('/api/outcome-options').then(setOptions).catch((cause: Error) => onError(cause.message)) }, [])
   useEffect(() => {
-    setStage(existing?.replied ? existing.stage : '')
+    setStage(existing?.replied || existing?.follow_up ? existing.stage : '')
     setTags(existing?.ask_tags || [])
     setText(existing?.reply_text || '')
     setRepliedAt(existing?.replied_at ? localInput(new Date(existing.replied_at)) : localInput(new Date()))
@@ -60,7 +62,7 @@ export default function ReplyPanel<Run extends { id: string; stage: string; stat
   const toggle = (tag: string) => {
     setTags((current) => current.includes(tag) ? current.filter((item) => item !== tag) : [...current, tag])
     // A refusal tag implies the stage unless the human already chose one.
-    if (!stage && ['not_needed', 'has_supplier'].includes(tag) && !tags.includes(tag)) setStage('replied_no_intent')
+    if ((!stage || stage === 'needs_followup') && ['not_needed', 'has_supplier'].includes(tag) && !tags.includes(tag)) setStage('replied_no_intent')
   }
 
   const readScreenshots = async (files: FileList | null) => {
@@ -88,11 +90,14 @@ export default function ReplyPanel<Run extends { id: string; stage: string; stat
 
   const save = (replied: boolean) => onSave(() => api<Run>(`/api/runs/${run.id}/reply`, {
     method: 'POST',
-    body: JSON.stringify(replied
+    body: JSON.stringify(followUp
+      ? { replied: false, stage, ask_tags: tags, reply_text: text || null, note: note.trim() }
+      : replied
       ? { replied: true, stage, ask_tags: tags, reply_text: text || null, replied_at: existing?.replied_at ? null : new Date(repliedAt).toISOString(), note: note || null }
       : { replied: false, stage: 'no_reply', ask_tags: [], note: note || '人工确认：对方已读不回' }),
   }))
 
+  const followUp = stage === 'needs_followup'
   const sentAt = existing?.sent_at ? new Date(existing.sent_at) : null
   const replyStages = options ? Object.entries(options.stages).filter(([key]) => key !== 'no_reply') : []
 
@@ -102,6 +107,8 @@ export default function ReplyPanel<Run extends { id: string; stage: string; stat
       {existing?.replied && existing.reply_timing && <span className={`badge ${existing.reply_timing === 'normal' ? 'success' : 'warning'}`}>{timingLabel[existing.reply_timing]}</span>}
     </div>
     {!existing?.replied && options && <p className="muted">{options.normal_reply_days} 天内回复算正常回复，{options.reply_window_days} 天内算迟回复；{options.reply_window_days} 天没有回复，系统会自动结束这条任务。{sentAt ? `发送时间：${sentAt.toLocaleString('zh-CN')}。` : ''}</p>}
+
+    {existing?.follow_up && <p className="unclear">等你跟进：{existing.follow_up_note}。跟进有了结果后，在下面改成真实的情况再保存。</p>}
 
     <div className="reply-read">
       <label className="slot-picker"><ImagePlus size={15} /><span>{reading ? '正在读取截图，约 10 秒…' : '上传私信截图，自动读出对方的回复（截图不保存）'}</span><input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={reading} onChange={(event) => void readScreenshots(event.target.files)} /></label>
@@ -120,13 +127,14 @@ export default function ReplyPanel<Run extends { id: string; stage: string; stat
     </div>
 
     <label>这家店走到哪一步了（你的判断）<select value={stage} onChange={(event) => setStage(event.target.value)}><option value="" disabled>请选择（必选）</option>{replyStages.map(([key, label]) => <option value={key} key={key}>{label}</option>)}</select></label>
-    <label>备注（可选）<input value={note} onChange={(event) => setNote(event.target.value)} placeholder="例如：对方说下个月再看" /></label>
+    <label>{followUp ? '要跟进什么（必填）' : '备注（可选）'}<input value={note} onChange={(event) => setNote(event.target.value)} placeholder={followUp ? '例如：对方是自动回复，明天再发一条' : '例如：对方说下个月再看'} /></label>
+    {followUp && <p className="muted">选这一项不算对方回复：这家店留在“等回复”，同时出现在“待处理”里；{options?.reply_window_days} 天的期限照常计算。</p>}
 
     <div className="button-row spread">
       {!existing?.replied ? <button className="secondary-button" type="button" disabled={busy} onClick={() => { if (window.confirm('确定标记为“已读不回”吗？这家店之后不会再被联系。')) save(false) }}><ShieldCheck size={14} />对方已读不回</button> : <span />}
-      <button className="primary-button" type="button" disabled={busy || !stage || (!text.trim() && tags.length === 0)} onClick={() => save(true)}><Check size={15} />{existing?.replied ? '更新记录' : '保存回复'}</button>
+      <button className="primary-button" type="button" disabled={busy || !stage || (followUp ? !note.trim() : !text.trim() && tags.length === 0)} onClick={() => save(true)}><Check size={15} />{followUp ? '记为需要我跟进' : existing?.replied ? '更新记录' : '保存回复'}</button>
     </div>
-    {!text.trim() && tags.length === 0 && <p className="muted">至少填写对方的原话，或选一个标签。</p>}
+    {!followUp && !text.trim() && tags.length === 0 && <p className="muted">至少填写对方的原话，或选一个标签。</p>}
     {!stage && (!!text.trim() || tags.length > 0) && <p className="muted">还需要选“这家店走到哪一步了”。</p>}
   </div>
 }

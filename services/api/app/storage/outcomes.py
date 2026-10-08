@@ -162,6 +162,7 @@ class OutcomesMixin(StoreBase):
         keep_do_not_contact: bool,
         timing_fn,
         system: bool = False,
+        follow_up: bool = False,
     ) -> dict[str, Any]:
         """Record the first reply (or the lack of one) and where the lead stands now."""
         with self.quota_lock, Session(self.engine) as session:
@@ -200,6 +201,10 @@ class OutcomesMixin(StoreBase):
                 if reply_text is not None:
                     outcome.reply_text = reply_text
                 outcome.ask_tags_json = json.dumps(ask_tags, ensure_ascii=False)
+            elif follow_up:
+                # Keep what came back (an automatic reply, say) without counting it as a reply.
+                outcome.reply_text = reply_text if reply_text is not None else outcome.reply_text
+                outcome.ask_tags_json = json.dumps(ask_tags, ensure_ascii=False)
             outcome.stage = stage
             outcome.conversion_status = "won" if stage == "won" else "lost" if stage == "lost" else "open"
             if stage == "won":
@@ -211,18 +216,20 @@ class OutcomesMixin(StoreBase):
             lead = session.get(ShopLead, task.shop_lead_id)
             if lead is not None:
                 lead.do_not_contact = keep_do_not_contact
-                lead.contact_status = "replied" if replied else "no_reply"
+                lead.contact_status = "contacted" if follow_up else "replied" if replied else "no_reply"
                 lead.updated_at = now
 
             payload = json.loads(snapshot.payload_json)
             state = payload["state"]
-            new_stage = "replied" if replied else "read_no_reply"
+            new_stage = "sent" if follow_up else "replied" if replied else "read_no_reply"
             state["task_status"] = new_stage
             state["reply"] = {
                 "replied": replied,
                 "stage": stage,
-                "ask_tags": ask_tags if replied else [],
-                "reply_text": outcome.reply_text if replied else None,
+                "follow_up": follow_up,
+                "follow_up_note": note if follow_up else None,
+                "ask_tags": ask_tags if replied or follow_up else [],
+                "reply_text": outcome.reply_text if replied or follow_up else None,
                 "replied_at": outcome.replied_at.isoformat() if outcome.replied_at else None,
                 "reply_timing": outcome.reply_timing if replied else None,
                 "sent_at": _aware(sent_at).isoformat(),
@@ -237,7 +244,7 @@ class OutcomesMixin(StoreBase):
             snapshot.updated_at = now
             task.status = new_stage
             task.updated_at = now
-            event = "no_reply_timeout" if system else "reply_recorded" if replied else "no_reply_recorded"
+            event = "no_reply_timeout" if system else "follow_up_recorded" if follow_up else "reply_recorded" if replied else "no_reply_recorded"
             session.add(RunEvent(run_id=run_id, event_type=event, payload_json=json.dumps(payload, ensure_ascii=False), created_at=now))
             session.add(
                 AuditLog(

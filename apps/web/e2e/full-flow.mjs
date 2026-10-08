@@ -188,8 +188,19 @@ await step('改草稿并选原因，通过并现在去发，文案被复制', as
   await page.click('text=通过并现在去发'); await page.waitForSelector('text=发送成功了吗'); expect(await page.locator('.final-text p').count() === 1, '发送中看不到文案')
 })
 await step('确认已发送，进入等回复', async () => { await page.click('text=已发送成功'); await page.waitForSelector('.reply-panel') })
-await step('记录回复：不选阶段不能保存；选“不需要”自动带出阶段', async () => {
-  await page.fill('.reply-panel textarea', '不用了谢谢'); expect(await page.locator('button:has-text("保存回复")').isDisabled(), '没选阶段却能保存')
+await step('误点“发送后出现异常”可以取消；自动回复记为“需要我跟进”，回到待处理', async () => {
+  await page.click('text=发送后出现异常')          // no dialog handler: the confirmation is dismissed, as if the user pressed cancel
+  await page.waitForTimeout(400); expect(await page.locator('.reply-panel').count() === 1 && await page.locator('.badge:has-text("发送异常")').count() === 0, '取消后仍被记成了异常')
+  await page.fill('.reply-panel textarea', '您好，欢迎咨询'); expect(await page.locator('button:has-text("保存回复")').isDisabled(), '没选阶段却能保存')
+  await page.click('.reply-panel .tag:has-text("对方自动回复")'); await page.selectOption('.reply-panel select', 'needs_followup')
+  expect(await page.locator('button:has-text("记为需要我跟进")').isDisabled(), '没写要跟进什么却能保存')
+  await page.fill('.reply-panel input[placeholder^="例如：对方是自动回复"]', '对方是自动回复，明天再发一条'); await page.click('button:has-text("记为需要我跟进")')
+  await page.waitForSelector('.reply-panel >> text=等你跟进：对方是自动回复')
+  expect(await page.locator('.badge:has-text("已回复")').count() === 0, '自动回复被算成了对方回复')
+  await page.click('.tabs button:has-text("待处理")'); await page.waitForSelector('text=等你跟进：对方是自动回复，明天再发一条')
+})
+await step('跟进后改记真实回复：选“不需要”自动带出阶段', async () => {
+  await page.fill('.reply-panel textarea', '不用了谢谢')
   await page.click('.reply-panel .tag:has-text("不需要")'); expect(await page.locator('.reply-panel select').inputValue() === 'replied_no_intent', '阶段没有自动带出')
   await page.click('button:has-text("保存回复")'); await page.waitForSelector('.badge:has-text("已回复")')
 })

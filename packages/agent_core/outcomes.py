@@ -39,7 +39,7 @@ ASK_TAG_GROUPS: dict[str, dict[str, str]] = {
     "了解工厂": {"visit": "问能否实地考察或有无展厅"},
     "推进联系": {"contact_request": "索要联系方式", "handoff": "说转交同事"},
     "拒绝": {"not_needed": "不需要", "has_supplier": "已有供应商"},
-    "其他": {"other": "其他"},
+    "其他": {"auto_reply": "对方自动回复", "other": "其他"},
 }
 ASK_TAGS: dict[str, str] = {key: label for group in ASK_TAG_GROUPS.values() for key, label in group.items()}
 PRODUCT_INTEREST_TAGS = frozenset(ASK_TAG_GROUPS["了解产品"])
@@ -47,6 +47,7 @@ DECLINE_TAGS = frozenset(ASK_TAG_GROUPS["拒绝"])
 
 STAGES: dict[str, str] = {
     "no_reply": "未回复",
+    "needs_followup": "其他，需要我跟进",
     "replied_no_intent": "已回复但无意向",
     "wants_info": "想了解产品",
     "sample": "要买样衣（成本价一件）",
@@ -54,6 +55,12 @@ STAGES: dict[str, str] = {
     "won": "成交",
     "lost": "未成交",
 }
+
+
+# User 2026-10-08: something came back that is neither interest nor refusal (an
+# automatic reply, say) and the human has to step in. It is not counted as a reply,
+# the shop stays in "waiting", and the 15-day rule keeps running.
+FOLLOW_UP_STAGE = "needs_followup"
 
 
 def reply_timing(sent_at: datetime, replied_at: datetime) -> ReplyTiming:
