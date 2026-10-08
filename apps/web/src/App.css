@@ -261,3 +261,17 @@ label { font-size:12px; }input,textarea,select { font-size:14px; }
 .finder-ok { margin:0; color:var(--teal); font-size:12.5px; overflow-wrap:anywhere; }
 .finder-pending { margin:0; padding-left:18px; font-size:12.5px; line-height:1.7; color:#52676a; }
 @media (max-width:700px) { .finder-search,.finder-current { grid-template-columns:1fr; } }
+
+/* Work record table: header text always whole; the table scrolls sideways instead of squeezing. */
+.worklog-bar { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin:14px 0; }
+.worklog-bar select { width:auto; min-width:130px; }
+.worklog-summary { color:var(--muted); font-size:12px; }
+.worklog-scroll { overflow:auto; max-height:70vh; border:1px solid var(--line); border-radius:10px; }
+.worklog-table { border-collapse:collapse; width:100%; font-size:13px; }
+.worklog-table th { position:sticky; top:0; z-index:1; background:#f4f6f5; text-align:left; font-weight:650; white-space:nowrap; padding:10px 12px; border-bottom:1px solid var(--line); }
+.worklog-table td { padding:10px 12px; border-bottom:1px solid var(--line); white-space:nowrap; vertical-align:top; }
+.worklog-table td.wide { white-space:normal; min-width:130px; max-width:240px; }
+.worklog-table tbody tr:not(.empty) { cursor:pointer; }
+.worklog-table tbody tr:not(.empty):hover, .worklog-table tbody tr:focus { background:#f7faf9; outline:none; }
+.worklog-table tr.empty td { color:var(--muted); text-align:center; }
+.reply-read .slot-picker span { white-space:normal; overflow:visible; }

@@ -274,6 +274,21 @@ class OutcomesMixin(StoreBase):
                     stale.append(row.id)
             return stale
 
+    def work_log_records(self) -> list[dict[str, Any]]:
+        """Every task with when it was created and, if it was, when it was sent."""
+        with Session(self.engine) as session:
+            sent = {row.run_id: row.sent_at for row in session.exec(select(ContactSnapshot))}
+            return [
+                {
+                    "run_id": row.id,
+                    "stage": row.stage,
+                    "created_at": _aware(row.created_at).isoformat(),
+                    "sent_at": _aware(sent[row.id]).isoformat() if row.id in sent else None,
+                    "state": json.loads(row.payload_json)["state"],
+                }
+                for row in session.exec(select(RunSnapshot))
+            ]
+
     def list_reply_records(self) -> list[dict[str, Any]]:
         """Contact-time snapshot joined with what happened afterwards, for analysis."""
         with Session(self.engine) as session:

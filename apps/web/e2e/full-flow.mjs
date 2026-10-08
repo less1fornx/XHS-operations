@@ -220,13 +220,26 @@ await step('原因汇总里出现刚才的原因', async () => {
   const text = (await page.locator('.reason-columns').innerText()).replace(/\s+/g, ' ')
   expect(text.includes('不是西装定制店'), '选路线时填的不联系原因没有进汇总'); expect(text.includes('太长'), '审文案时选的修改原因没有进汇总'); return text.slice(0, 80)
 })
+await step('工作记录：表头完整、能筛选、能导出', async () => {
+  await nav('工作记录'); await page.waitForSelector('.worklog-table tbody tr')
+  const heads = await page.locator('.worklog-table th').evaluateAll((cells) => cells.map((el) => ({ text: el.textContent, cut: el.scrollWidth > el.clientWidth + 1, lines: Math.round(el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).lineHeight || '18')) })))
+  expect(heads.length === 9 && heads.every((head) => !head.cut), `表头被截断：${JSON.stringify(heads.filter((head) => head.cut))}`)
+  expect(await page.locator('.worklog-table tbody tr:has-text("已回复")').count() >= 1, '表里看不到已回复的那家')
+  await page.selectOption('.worklog-bar select', 'failed'); expect(await page.locator('.worklog-table tr.empty').count() === 1, '按步骤筛选没有生效')
+  await page.selectOption('.worklog-bar select', '')
+  const [file] = await Promise.all([page.waitForEvent('download'), page.click('text=导出为表格文件')])
+  expect(file.suggestedFilename().endsWith('.csv'), '没有导出表格文件')
+})
+await step('工作记录：点一行跳到这家店', async () => {
+  await page.locator('.worklog-table tbody tr:has-text("已回复")').first().click(); await page.waitForSelector('.reply-panel')
+})
 await step('风险记录页能打开', async () => { await nav('风险记录'); await page.waitForSelector('.risk-list') })
 
 await step('手机宽度：导航有文字，各页文字没有被截断或挤成竖排', async () => {
   await page.setViewportSize({ width: 390, height: 800 })
   const labels = await page.locator('.nav-item').evaluateAll((items) => items.map((el) => getComputedStyle(el).fontSize))
   expect(labels.every((size) => parseFloat(size) >= 10), '手机上导航没有文字')
-  for (const label of ['进度与反馈', '批量初筛', '候选工作流']) { await nav(label); await page.waitForTimeout(300); await cutOffText(`手机·${label}`) }
+  for (const label of ['进度与反馈', '批量初筛', '工作记录', '候选工作流']) { await nav(label); await page.waitForTimeout(300); await cutOffText(`手机·${label}`) }
   await page.click('.tabs button:has-text("全部")'); await page.locator('.run-row').first().click(); await page.waitForTimeout(300); await cutOffText('手机·任务详情')
 })
 

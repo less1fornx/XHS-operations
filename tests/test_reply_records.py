@@ -184,3 +184,18 @@ def test_follow_up_keeps_waiting_and_is_not_counted_as_a_reply(tmp_path) -> None
     # A real reply later replaces it and counts from then on.
     later = record(store, stage="wants_info", ask_tags=["price"])
     assert later["stage"] == "replied" and not later["state"]["reply"]["follow_up"]
+
+
+def test_work_log_has_one_row_per_shop_with_all_columns(tmp_path) -> None:
+    from services.worker.work_log import COLUMNS, build_rows
+
+    store = make_store(tmp_path)
+    sent_run(store)
+    record(store, replied=False, stage="needs_followup", ask_tags=["auto_reply"], note="明天再发一条",
+           keep_do_not_contact=False, follow_up=True)
+    rows = build_rows(store.work_log_records())
+    assert len(rows) == 1 and len(rows[0]["cells"]) == len(COLUMNS) == 9
+    cells = rows[0]["cells"]
+    assert cells[3] == "优先看" and cells[4] == "私信" and cells[5] == "等回复（等你跟进）"
+    assert cells[7] == "对方自动回复" and cells[8] == "明天再发一条"
+    assert rows[0]["sent"] and not rows[0]["effective"]

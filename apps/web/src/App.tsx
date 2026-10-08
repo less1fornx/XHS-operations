@@ -25,11 +25,12 @@ import { api, copyToClipboard, keyPart } from './api'
 import ScreeningView from './Screening'
 import ReplyPanel, { type ReplyState } from './Reply'
 import ProgressView from './Progress'
+import WorkLogView from './WorkLog'
 
 type Channel = 'dm' | 'comment' | 'none'
 type ContactBasis = 'cold_outreach' | 'prior_conversation' | 'inbound_inquiry' | 'explicit_permission'
 type Stage = 'route_review' | 'content_review' | 'scheduled' | 'opened' | 'sent' | 'failed' | 'read_no_reply' | 'blocked'
-type View = 'progress' | 'screening' | 'workflow' | 'risk'
+type View = 'progress' | 'screening' | 'workflow' | 'worklog' | 'risk'
 type ShopType = 'suit_custom' | 'menswear' | 'apparel_studio' | 'content_creator' | 'staff_account' | 'hobbyist' | 'supplier' | 'other'
 
 type Run = {
@@ -445,6 +446,7 @@ function App() {
           <button className={`nav-item ${view === 'progress' ? 'active' : ''}`} type="button" onClick={() => setView('progress')}><Gauge size={16} />进度与反馈</button>
           <button className={`nav-item ${view === 'screening' ? 'active' : ''}`} type="button" onClick={() => setView('screening')}><Images size={16} />批量初筛</button>
           <button className={`nav-item ${view === 'workflow' ? 'active' : ''}`} type="button" onClick={() => setView('workflow')}><Inbox size={16} />候选工作流{counts.todo + counts.sending > 0 && <span className="nav-count" title="等你处理或等你发送的任务数">{counts.todo + counts.sending}</span>}</button>
+          <button className={`nav-item ${view === 'worklog' ? 'active' : ''}`} type="button" onClick={() => setView('worklog')}><FileText size={16} />工作记录</button>
           <button className={`nav-item ${view === 'risk' ? 'active' : ''}`} type="button" onClick={() => setView('risk')}><FileText size={16} />风险记录</button>
         </nav>
         <div className="sidebar-footer"><CircleDot size={12} /><span>本地模式</span><small>发送由人工完成</small></div>
@@ -452,7 +454,7 @@ function App() {
 
       <main className="main-content">
         <header className="topbar">
-          <div><p className="eyebrow">小红书 · 个人号</p><h1>{view === 'progress' ? '进度与反馈' : view === 'screening' ? '批量初筛' : view === 'workflow' ? '候选工作流' : '风险记录'}</h1></div>
+          <div><p className="eyebrow">小红书 · 个人号</p><h1>{view === 'progress' ? '进度与反馈' : view === 'screening' ? '批量初筛' : view === 'workflow' ? '候选工作流' : view === 'worklog' ? '工作记录' : '风险记录'}</h1></div>
           <div className="quota-strip">
             <div><span>今日私信</span><strong>{summary ? `${summary.dm.used}/${summary.dm.limit}` : '--'}</strong></div>
             <div><span>今日评论</span><strong>{summary ? `${summary.comment.used}/${summary.comment.limit}` : '--'}</strong></div>
@@ -598,6 +600,7 @@ function App() {
         </div>}
 
         {view === 'progress' && <ProgressView onNavigate={setView} />}
+        {view === 'worklog' && <WorkLogView onError={setError} onOpen={(runId) => { setFilter('all'); setSelectedId(runId); setView('workflow') }} />}
 
         {view === 'risk' && <section className="panel page-panel">
           <div className="panel-heading"><div><h2>风险与账号状态</h2></div><span className={`badge ${frozen ? 'danger' : summary?.status === 'degraded' ? 'warning' : 'success'}`}>{frozen ? '队列冻结' : summary?.status === 'degraded' ? '降级运行' : '账号正常'}</span></div>

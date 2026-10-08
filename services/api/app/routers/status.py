@@ -18,6 +18,7 @@ from packages.agent_core.edits import EDIT_REASONS, END_REASON_GROUPS, END_REASO
 from packages.agent_core.outcomes import (  # noqa: E402
     scrub_contact_info,
 )
+from services.worker.work_log import COLUMNS, STEP, build_rows  # noqa: E402
 from services.worker.status_report import FEEDBACK_AREAS, collect as collect_status, stage_rows  # noqa: E402
 
 
@@ -71,6 +72,11 @@ def project_status() -> dict[str, Any]:
         "feedback_areas": FEEDBACK_AREAS,
         "notes": store.list_feedback_notes(),
     }
+
+
+@router.get("/api/work-log")
+def work_log() -> dict[str, Any]:
+    return {"columns": COLUMNS, "steps": STEP, "rows": build_rows(store.work_log_records())}
 
 
 @router.post("/api/feedback")
