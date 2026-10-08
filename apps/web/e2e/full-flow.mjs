@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 
 const WEB = process.env.E2E_WEB_URL || 'http://127.0.0.1:5192'
 const SHOTS = process.env.E2E_SHOT_DIR || ''
+const INBOX_DIR = process.env.E2E_INBOX_DIR || ''
 const fixture = (name) => join(dirname(fileURLToPath(import.meta.url)), 'fixtures', name)
 if (SHOTS) mkdirSync(SHOTS, { recursive: true })
 
@@ -63,6 +64,48 @@ await step('提交一条意见，联系方式被隐去', async () => {
   const text = await page.locator('.note-item p').first().textContent(); expect(!text.includes('13800001111'), '电话没有被隐去'); return text
 })
 
+// What pressing the paste key does after a screenshot went to the clipboard.
+const pasteImage = (bytes) => page.evaluate((text) => {
+  const data = new DataTransfer(); data.items.add(new File([text], 'image.png', { type: 'image/png' }))
+  window.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }))
+}, bytes)
+
+await step('找店第 1 步：输入搜索词和城市，得到优化后的搜索词，每条是一个去小红书搜索的链接', async () => {
+  await nav('批量初筛'); await page.waitForSelector('.finder-suggestion')
+  await page.fill('.finder-search input >> nth=1', '深圳'); await page.click('text=给出搜索词')
+  await page.waitForSelector('.finder-suggestion:has-text("深圳 西装定制 商务休闲")')
+  const links = await page.locator('.finder-suggestion').evaluateAll((items) => items.map((a) => ({ href: a.href, target: a.target, why: a.querySelector('small')?.textContent || '' })))
+  expect(links.length >= 6, `搜索词太少：${links.length}`)
+  expect(links.every((l) => l.href.startsWith('https://www.xiaohongshu.com/search_result?keyword=') && l.target === '_blank'), '链接应该在新标签页打开小红书搜索')
+  expect(links.every((l) => l.why.length > 3), '每条应该写明原因'); await cutOffText('找店')
+  return `${links.length} 条`
+})
+await step('找店第 2 步：粘贴搜索结果页截图，存进“搜索结果”文件夹', async () => {
+  await page.click('.finder-mode button:has-text("这是搜索结果页")'); await pasteImage('SEARCH')
+  await page.waitForSelector('.finder-ok:has-text("搜索结果")'); expect(readdirSync(join(INBOX_DIR, '搜索结果')).length === 1, '搜索结果截图没有存进去')
+})
+await step('找店第 2 步：粘贴两张算第 1 家，点“下一家”后再粘贴算第 2 家，名字由系统起', async () => {
+  await page.click('.finder-mode button:has-text("这是一家店的截图")')
+  await pasteImage('PRICE:2999'); await page.waitForSelector('.finder-ok:has-text("第1家-1.png")')
+  await pasteImage('x'); await page.waitForSelector('.finder-ok:has-text("第1家-2.png")')
+  expect((await page.locator('.finder-current span').textContent()).includes('已有 2 张'), '粘贴后“已有几张”没有立刻更新')
+  await page.click('.finder-current button:has-text("下一家")'); await pasteImage('x'); await page.waitForSelector('.finder-ok:has-text("第2家-1.png")')
+  const names = readdirSync(INBOX_DIR).filter((n) => n.endsWith('.png')).sort()
+  expect(names.length === 3 && names.every((n) => /^找店\d{4}-\d{4}-第[12]家-[12]\.png$/.test(n)), `文件名不符合规则：${names.join(',')}`)
+  return names.join('、')
+})
+await step('粘贴的不是图片时有提示', async () => {
+  await page.evaluate(() => { const d = new DataTransfer(); d.setData('text/plain', 'hello'); window.dispatchEvent(new ClipboardEvent('paste', { clipboardData: d, bubbles: true })) })
+  await page.waitForSelector('.unclear:has-text("剪贴板里没有图片")')
+})
+await step('找店第 3 步：读取，第 1 家用了 2 张图，共两张卡片', async () => {
+  await page.waitForSelector('.finder-pending li:has-text("第1家：2 张")', { timeout: 15000 }); await page.waitForSelector('.finder-panel .badge:has-text("3 张待读取")', { timeout: 15000 })
+  await page.click('.finder-panel .primary-button'); await page.waitForFunction(() => document.querySelectorAll('.shop-card').length === 2, null, { timeout: 60000 })
+  const first = await page.locator('.shop-card >> nth=0').evaluate((el) => ({ badge: el.querySelector('header .badge')?.textContent, images: el.querySelectorAll('.thumbs a').length }))
+  expect(first.badge === '优先看' && first.images === 2, `第 1 家应排最前且有 2 张图：${JSON.stringify(first)}`)
+  expect(readdirSync(INBOX_DIR).filter((n) => n.endsWith('.png')).length === 0, '读完后原图应该已归档'); await page.click('text=返回上传')
+})
+
 const INBOX = process.env.E2E_INBOX_DIR || ''
 const drop = (name, content) => {      // a screenshot saved a moment ago by someone browsing
   const file = join(INBOX, name); mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, content)
@@ -71,15 +114,15 @@ const drop = (name, content) => {      // a screenshot saved a moment ago by som
 await step('截图文件夹：不上传、不改名，系统自己认出哪几张是同一家', async () => {
   expect(INBOX, '没有配置截图文件夹')
   drop('截屏 10.01.png', 'SHOP:甲店'); drop('截屏 10.02.png', 'SHOP:甲 店'); drop('乙店-1.png', 'PRICE:2999'); drop('丙店/随便.png', 'x'); drop('截屏 10.05.png', 'SEARCH'); drop('截屏 10.06.png', 'DM')
-  await nav('批量初筛'); await page.waitForSelector('.inbox-panel .badge:has-text("6 张新截图")', { timeout: 15000 })
-  await page.click('.inbox-panel .primary-button'); await page.waitForFunction(() => document.querySelectorAll('.shop-card').length === 3, null, { timeout: 60000 })
+  await nav('批量初筛'); await page.waitForSelector('.finder-panel .badge:has-text("6 张待读取")', { timeout: 15000 })
+  await page.click('.finder-panel .primary-button'); await page.waitForFunction(() => document.querySelectorAll('.shop-card').length === 3, null, { timeout: 60000 })
   const notes = await page.locator('.inbox-notes').innerText()
   expect(notes.includes('搜索结果页') && notes.includes('私信截图不在这里读取'), `没有说明被跳过的截图：${notes}`)
   expect(readdirSync(INBOX).sort().join(',') === '已读取,搜索结果,没认出来', `文件夹里应该只剩三个结果文件夹：${readdirSync(INBOX).join(',')}`)
   const done = readdirSync(join(INBOX, '已读取')).flatMap((stamp) => readdirSync(join(INBOX, '已读取', stamp)))
-  expect(done.length === 4 && existsSync(join(INBOX, '搜索结果', '截屏 10.05.png')), `原图没有按结果归档：${done.join(',')}`)
+  expect(['截屏 10.01.png', '截屏 10.02.png', '乙店-1.png', '丙店-随便.png'].every((name) => done.includes(name)) && existsSync(join(INBOX, '搜索结果', '截屏 10.05.png')), `原图没有按结果归档：${done.join(',')}`)
   await cutOffText('文件夹读取结果'); await page.click('text=返回上传')
-  await page.waitForSelector('.inbox-panel .badge:has-text("0 张新截图")'); expect(await page.locator('.inbox-panel .primary-button').isDisabled(), '没有新截图时按钮应该不可点')
+  await page.waitForSelector('.finder-panel .badge:has-text("0 张待读取")'); expect(await page.locator('.finder-panel .primary-button').isDisabled(), '没有新截图时按钮应该不可点')
 })
 
 await step('排先后：标价够高的排最前，没有价格的其次并提示补图，最贵也不到门槛的不联系', async () => {

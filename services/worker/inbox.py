@@ -166,3 +166,57 @@ def move_into(root: Path, file: Path, folder: str, stamp: str | None = None) -> 
 
 def batch_stamp() -> str:
     return datetime.now().strftime("%Y%m%d-%H%M")
+
+
+# --- Screenshots pasted on the page are filed here under a name the rules understand ---
+
+_UNSAFE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
+
+def clean_label(label: str) -> str:
+    """A shop remark safe to use as a file name and readable by explicit_group()."""
+    text = _UNSAFE.sub("", label).strip().strip(".-_ ")[:40]
+    if not text or _AUTO_NAME.match(text) or re.search(r"\d{6,}", text) or text in RESERVED_DIRS:
+        return ""
+    return text
+
+
+def save_pasted(root: Path, data: bytes, suffix: str, kind: str, label: str = "") -> Path:
+    """Write one pasted screenshot into the inbox. Shop pictures become 店名-序号; search pages go to 搜索结果."""
+    if kind == "search":
+        folder = root / SEARCH_DIR
+        folder.mkdir(parents=True, exist_ok=True)
+        stem = "搜索" + datetime.now().strftime("%m%d-%H%M%S")
+        target = folder / f"{stem}{suffix}"
+        counter = 1
+        while target.exists():
+            target = folder / f"{stem}-{counter}{suffix}"
+            counter += 1
+    else:
+        name = clean_label(label)
+        if not name:
+            raise ValueError("这家店的备注名不能用作文件名，请换一个（不要用纯数字或“截图”开头）")
+        used = [
+            int(match.group(1))
+            for file in root.iterdir()
+            if file.is_file() and (match := re.match(re.escape(name) + r"-(\d{1,2})$", file.stem))
+        ]
+        target = root / f"{name}-{max(used, default=0) + 1}{suffix}"
+    target.write_bytes(data)
+    return target
+
+
+def pending_by_shop(root: Path, files: list[Path]) -> list[dict]:
+    """Waiting screenshots as the page shows them: named shops with counts, and the unnamed rest."""
+    counts: dict[str, int] = {}
+    unnamed = 0
+    for file in files:
+        name = explicit_group(file, root)
+        if name:
+            counts[name] = counts.get(name, 0) + 1
+        else:
+            unnamed += 1
+    rows = [{"label": name, "images": count} for name, count in counts.items()]
+    if unnamed:
+        rows.append({"label": None, "images": unnamed})
+    return rows

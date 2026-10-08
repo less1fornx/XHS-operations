@@ -1,0 +1,16 @@
+{
+  "version": "search-keywords-v1",
+  "note": "把一个搜索词扩成几条更容易找到目标店的搜索词。规则由程序拼接，不调用模型。词表来自用户的筛选标准和已读过的真实店铺主页用语；Claude 起草，待用户增删。",
+  "default_seed": "西装定制",
+  "variants": [
+    {"suffix": "", "city": true, "why": "加上城市，找本地有门店的店；小红书的搜索结果偏向同城"},
+    {"suffix": "商务休闲", "city": true, "why": "日常穿着为主的店，避开只做婚礼的"},
+    {"suffix": "全麻衬", "city": false, "why": "讲工艺的店客单价通常更高"},
+    {"suffix": "价格表", "city": true, "why": "直接找到标了价的笔记，方便过价格门槛"},
+    {"suffix": "主理人", "city": false, "why": "个人主理的店，看消息的就是做决定的人"},
+    {"suffix": "意式", "city": false, "why": "休闲西装风格，更常搭针织内搭"},
+    {"suffix": "布雷泽", "city": false, "why": "单西和休闲西装，日常场景"},
+    {"replace": "西服高定", "city": true, "why": "换一种说法，覆盖不用“西装定制”这个词的店"},
+    {"replace": "bespoke 西装", "city": false, "why": "高端定制店常用的英文叫法"}
+  ]
+}

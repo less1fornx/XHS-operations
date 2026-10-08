@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
+from urllib.parse import quote
 from threading import Thread
 from pathlib import Path
 from typing import Any, Literal
@@ -32,7 +34,9 @@ from packages.agent_core.screening import (  # noqa: E402
     today_in_shanghai,
 )
 from services.worker.screening import UPLOAD_ROOT, purge_old_uploads  # noqa: E402
-from services.worker.inbox import DONE_DIR, batch_stamp, inbox_dir, list_pending, move_into, plan_import  # noqa: E402
+from services.worker.inbox import (  # noqa: E402
+    DONE_DIR, SEARCH_DIR, batch_stamp, inbox_dir, list_pending, move_into, pending_by_shop, plan_import, save_pasted,
+)
 from packages.agent_core.vision import identify_screenshot  # noqa: E402
 from packages.workflows.screening_workflow import classify_error, rank_results  # noqa: E402
 from ..flows.run_flow import (  # noqa: E402
@@ -46,6 +50,7 @@ from ..flows.batch_flow import (  # noqa: E402
 
 
 router = APIRouter()
+SEARCH_KEYWORDS_PATH = Path(__file__).resolve().parents[4] / "config" / "search_keywords.v1.json"
 
 
 # --- Phase 2C: screenshot batches -------------------------------------------
@@ -141,7 +146,64 @@ def inbox_status() -> dict[str, Any]:
     except OSError:
         return {"state": "unreachable", "path": str(root), "pending": 0, "names": []}
     names = [str(f.relative_to(root)) for f in files]
-    return {"state": "ready", "path": str(root), "pending": len(files), "names": names[:30]}
+    search_dir = root / SEARCH_DIR
+    return {
+        "state": "ready", "path": str(root), "pending": len(files), "names": names[:30],
+        "shops": pending_by_shop(root, files),
+        "search_pages": sum(1 for f in search_dir.iterdir() if f.is_file()) if search_dir.is_dir() else 0,
+    }
+
+
+@router.post("/api/inbox/paste")
+async def paste_into_inbox(request: Request) -> dict[str, Any]:
+    """Save one screenshot pasted on the page into the shared folder, named so it groups by shop."""
+    root, state = _inbox_state()
+    if state == "not_configured":
+        raise HTTPException(status_code=409, detail="inbox_not_configured: 还没有设置截图文件夹")
+    if state != "ready":
+        raise HTTPException(status_code=409, detail=f"inbox_unreachable: 截图文件夹连不上（{root}）。请确认共享盘已经连接。")
+    form = await request.form()
+    upload = form.get("image")
+    if not isinstance(upload, UploadFile):
+        raise HTTPException(status_code=409, detail="no_image: 剪贴板里没有图片。请先截图，再粘贴。")
+    suffix = ALLOWED_IMAGE_TYPES.get(upload.content_type or "")
+    if suffix is None:
+        raise HTTPException(status_code=409, detail="invalid_image: 只支持 JPG、PNG 或 WebP 图片")
+    data = await upload.read()
+    if len(data) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=409, detail="image_too_large: 图片超过 10MB")
+    kind = "search" if form.get("kind") == "search" else "shop"
+    try:
+        saved = save_pasted(root, data, suffix, kind, str(form.get("label") or ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=f"invalid_label: {exc}") from exc
+    return {"saved": str(saved.relative_to(root)), "kind": kind}
+
+
+@router.get("/api/search-suggestions")
+def search_suggestions(seed: str = "", city: str = "") -> dict[str, Any]:
+    """Turn one search word into several that are more likely to surface target shops.
+
+    Built by rule from config, no model call. Each item is a link the human opens;
+    the system never runs the search or touches the result page.
+    """
+    config = json.loads(SEARCH_KEYWORDS_PATH.read_text(encoding="utf-8"))
+    base = " ".join(seed.split())[:30] or config["default_seed"]
+    place = " ".join(city.split())[:10]
+    items, seen = [], set()
+    for variant in config["variants"]:
+        words = [variant["replace"]] if variant.get("replace") else [base, variant.get("suffix", "")]
+        if variant.get("city") and place:
+            words.insert(0, place)
+        query = " ".join(word for word in words if word)
+        if query in seen or (query == base and not place):
+            continue
+        seen.add(query)
+        items.append({"query": query, "why": variant["why"],
+                      "url": "https://www.xiaohongshu.com/search_result?keyword=" + quote(query)})
+    return {"seed": base, "city": place, "items": [
+        {"query": base, "why": "你输入的原词", "url": "https://www.xiaohongshu.com/search_result?keyword=" + quote(base)}, *items,
+    ]}
 
 
 @router.post("/api/inbox/import")

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { AlertTriangle, Check, ImagePlus, Plus, Send, Trash2, X } from 'lucide-react'
 import { API, accessCode, api } from './api'
+import Finder, { type Inbox } from './Finder'
 
 // Phase 2C: upload screenshots for up to 10 shops, let the system read and rank
 // them, then approve the list once (user decisions 2026-10-03).
@@ -54,7 +55,6 @@ type Batch = {
   drafts: { shop_key: string; shop_name: string; route: Route; status: string; error?: string }[]
 }
 
-type Inbox = { state: 'ready' | 'unreachable' | 'not_configured'; path: string | null; pending: number; names: string[] }
 type InboxResult = { batch: Batch | null; skipped: { name: string; reason: string }[]; waiting: number; groups: { shop_key: string; label: string; images: number; unused: number }[] }
 type BatchSummary = { id: string; status: string; shop_count: number; created_at: string; shop_names?: string[] }
 
@@ -231,30 +231,14 @@ export default function ScreeningView({ onOpenWorkflow }: { onOpenWorkflow: () =
         {!inboxResult.batch && <p>这次没有读出任何一家店。</p>}
       </div>}
 
-      {!batch && inbox && inbox.state !== 'not_configured' && <section className="panel inbox-panel">
-        <div className="panel-heading"><div><h2>从截图文件夹读取</h2></div><span className={`badge ${inbox.state === 'ready' ? (inbox.pending ? 'warning' : 'neutral') : 'danger'}`}>{inbox.state === 'ready' ? `${inbox.pending} 张新截图` : '文件夹连不上'}</span></div>
-        {inbox.state === 'unreachable' && <p className="unclear">截图文件夹连不上：{inbox.path}。请确认这台电脑已经连接共享盘，然后刷新。</p>}
-        {inbox.state === 'ready' && <>
-          <p className="muted">在小红书里看店时随手截图，存到这个文件夹，不用改名也不用上传：<b>{inbox.path}</b>（这是它在这台电脑上的位置；其他设备打开共享盘里的同一个文件夹即可）</p>
-          <details className="more-detail"><summary>系统怎么知道哪几张是同一家</summary>
-            <ul className="rule-list">
-              <li><b>不改名</b>：系统读图里的账号名和小红书号，同一个账号的图自动归到一起。</li>
-              <li><b>文件名写成“店名-1”“店名-2”</b>：横杠前面相同的算同一家。</li>
-              <li><b>建一个子文件夹</b>：文件夹里的图都算同一家，文件夹名就是你的备注名。</li>
-              <li>读完后原图会移到同目录的“已读取”，认不出的移到“没认出来”，搜索结果页移到“搜索结果”。只移动，不删除。</li>
-              <li>每家店最多用 3 张，一批最多 10 家。</li>
-            </ul>
-          </details>
-          {inbox.pending > 0 && <p className="muted inbox-names">{inbox.names.slice(0, 8).join('、')}{inbox.pending > 8 ? ` 等 ${inbox.pending} 张` : ''}</p>}
-          <div className="button-row">
-            <span className="muted">{inbox.pending ? '一家店的图都截完了再点，避免同一家被拆成两批。' : '文件夹里现在没有新截图。'}</span>
-            <button className="primary-button" type="button" disabled={busy || inbox.pending === 0} onClick={() => void importInbox()}>{busy ? '正在分拣和读取，每张图约几秒…' : inbox.pending ? `读取这 ${inbox.pending} 张截图` : '没有新截图'}</button>
-          </div>
-        </>}
+      {!batch && inbox?.state === 'unreachable' && <section className="panel inbox-panel">
+        <div className="panel-heading"><div><h2>找店</h2></div><span className="badge danger">文件夹连不上</span></div>
+        <p className="unclear">截图文件夹连不上：{inbox.path}。请确认这台电脑已经连接共享盘，然后刷新。下面的手动上传仍然可以用。</p>
       </section>}
+      {!batch && inbox?.state === 'ready' && <Finder inbox={inbox} busy={busy} onChanged={() => void loadInbox()} onImport={() => void importInbox()} />}
 
       {!batch && <section className="panel">
-        <div className="panel-heading"><div><h2>上传一批店铺截图</h2></div><span className="badge neutral">{filledShops}/{MAX_SHOPS} 家</span></div>
+        <div className="panel-heading"><div><h2>或者：手动上传截图</h2></div><span className="badge neutral">{filledShops}/{MAX_SHOPS} 家</span></div>
         <p className="muted">每家店上传 1 到 {MAX_IMAGES} 张截图，其中至少一张是账号主页。支持 JPG、PNG、WebP，单张不超过 10MB；苹果手机相册里的 HEIC 照片不支持，手机截图默认是 PNG，可以直接用。系统只读取截图里看得见的信息，原图在本机保存 10 天后自动删除。</p>
         <div className="slot-list">
           {slots.map((files, index) => <div className="slot-row" key={index}>

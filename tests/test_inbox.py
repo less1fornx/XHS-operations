@@ -89,3 +89,23 @@ def test_a_name_cut_short_by_scrolling_joins_the_full_name(tmp_path) -> None:
     plan = plan_import(tmp_path, list_pending(tmp_path), identify)
 
     assert {g["label"]: len(g["files"]) for g in plan.groups} == {"西装先生 MR.COLLECTION": 3, "西装定制小店": 1}
+
+
+def test_pasted_screenshots_get_names_the_grouping_rule_reads_back(tmp_path) -> None:
+    from services.worker.inbox import clean_label, pending_by_shop, save_pasted
+
+    label = "找店1006-0935-第1家"
+    first = save_pasted(tmp_path, b"a", ".png", "shop", label)
+    second = save_pasted(tmp_path, b"b", ".png", "shop", label)
+    other = save_pasted(tmp_path, b"c", ".jpg", "shop", "睿曼/西服")            # unsafe characters are dropped
+    search = save_pasted(tmp_path, b"d", ".png", "search")
+    for file in (first, second, other):
+        os.utime(file, (time.time() - 10, time.time() - 10))
+
+    assert [first.name, second.name, other.name] == [f"{label}-1.png", f"{label}-2.png", "睿曼西服-1.jpg"]
+    assert search.parent.name == SEARCH_DIR
+    files = list_pending(tmp_path)
+    assert pending_by_shop(tmp_path, files) == [{"label": label, "images": 2}, {"label": "睿曼西服", "images": 1}]
+    plan = plan_import(tmp_path, files, identify)                                # named groups need no model call
+    assert {g["label"]: len(g["files"]) for g in plan.groups} == {label: 2, "睿曼西服": 1} and not plan.skipped
+    assert clean_label("截图123") == "" and clean_label("20261006102345") == "" and clean_label("  ") == ""
