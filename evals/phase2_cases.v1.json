@@ -1,0 +1,284 @@
+[
+  {
+    "input": {
+      "case_id": "XHS-2026-0001",
+      "shop_name": "样例店铺01",
+      "xhs_account": "样例账号01",
+      "profile_url": null,
+      "account_type": "personal",
+      "shop_type": "suit_custom",
+      "activity_note": "近30天发布8条，持续展示量体和试衣内容",
+      "price_level": "mid_high",
+      "business_context_note": "主营商务与婚礼场景男士西装定制",
+      "purchase_signal_note": "近期连续发布春夏面料和客户试衣案例",
+      "content_url": null,
+      "content_text": "春夏轻薄西装怎么兼顾挺括和透气，视频展示了客户第一次试衣。",
+      "evidence": [
+        {
+          "evidence_id": "e1",
+          "text": "春夏轻薄西装和客户第一次试衣",
+          "source_type": "content"
+        },
+        {
+          "evidence_id": "e2",
+          "text": "账号近期持续更新定制案例",
+          "source_type": "profile"
+        }
+      ],
+      "contact_mode": "cold",
+      "contact_history_note": "此前没有互动或私信",
+      "prior_outcome": "none",
+      "product_facts": [
+        "我们是毛衫工厂，为西装定制店提供西装内搭，款式不限，一件起订，一件也可以做",
+        "累计已承接过约200家不同西装定制店的业务",
+        "注重纱线、细节和做工，品质有保障",
+        "内搭是西装定制店的附加业务：客人订西装时可以一起搭配；店里只需留一件样衣，没有存货压力，有订单再下单",
+        "样衣不免费寄送；对方有意向时可按成本价购买一件，由我方邮寄",
+        "常见款式包括夏季针织polo等短袖款、秋冬套头与开衫款"
+      ],
+      "brand_context": "强调稳定供货、真实产品和长期合作"
+    },
+    "expected": {
+      "route": "dm",
+      "must_include": [
+        "内搭"
+      ],
+      "must_not_include": [
+        "开拓",
+        "微信",
+        "拓展针织",
+        "最低价",
+        "看主页",
+        "补充针织品类",
+        "针织供应链",
+        "是否有",
+        "有没有兴趣",
+        "品质有保障"
+      ]
+    }
+  },
+  {
+    "input": {
+      "case_id": "XHS-2026-0004",
+      "shop_name": "样例店铺02",
+      "xhs_account": "样例账号02",
+      "profile_url": null,
+      "account_type": "personal",
+      "shop_type": "other",
+      "activity_note": "近30天发布12条家居摆件和软装内容",
+      "price_level": "unknown",
+      "business_context_note": "主营家居软装，与服装采购场景无关",
+      "purchase_signal_note": null,
+      "content_url": null,
+      "content_text": "小户型客厅软装搭配分享。",
+      "evidence": [
+        {
+          "evidence_id": "e1",
+          "text": "内容为家居软装",
+          "source_type": "content"
+        }
+      ],
+      "contact_mode": "cold",
+      "contact_history_note": "此前没有互动或私信",
+      "prior_outcome": "none",
+      "product_facts": [
+        "我们是毛衫工厂，为西装定制店提供西装内搭，款式不限，一件起订，一件也可以做",
+        "累计已承接过约200家不同西装定制店的业务",
+        "注重纱线、细节和做工，品质有保障",
+        "内搭是西装定制店的附加业务：客人订西装时可以一起搭配；店里只需留一件样衣，没有存货压力，有订单再下单",
+        "样衣不免费寄送；对方有意向时可按成本价购买一件，由我方邮寄",
+        "常见款式包括夏季针织polo等短袖款、秋冬套头与开衫款"
+      ],
+      "brand_context": null
+    },
+    "expected": {
+      "route": "reject",
+      "must_include": [],
+      "must_not_include": [
+        "西装",
+        "一件起订"
+      ]
+    }
+  },
+  {
+    "input": {
+      "case_id": "XHS-2026-0005",
+      "shop_name": "样例店铺03",
+      "xhs_account": "样例账号03",
+      "profile_url": null,
+      "account_type": "personal",
+      "shop_type": "suit_custom",
+      "activity_note": "近30天发布10条，更新频率较高",
+      "price_level": "mid_high",
+      "business_context_note": "主营中高客单价西装定制",
+      "purchase_signal_note": null,
+      "content_url": null,
+      "content_text": "定制西装如何选择合适版型，展示客户试穿。",
+      "evidence": [
+        {
+          "evidence_id": "e1",
+          "text": "历史私信已读但未回复",
+          "source_type": "conversation"
+        }
+      ],
+      "contact_mode": "cold",
+      "contact_history_note": "7天前发送过一次私信，对方已读未回复",
+      "prior_outcome": "read_no_reply",
+      "product_facts": [
+        "我们是毛衫工厂，为西装定制店提供西装内搭，款式不限，一件起订，一件也可以做",
+        "累计已承接过约200家不同西装定制店的业务",
+        "注重纱线、细节和做工，品质有保障",
+        "内搭是西装定制店的附加业务：客人订西装时可以一起搭配；店里只需留一件样衣，没有存货压力，有订单再下单",
+        "样衣不免费寄送；对方有意向时可按成本价购买一件，由我方邮寄",
+        "常见款式包括夏季针织polo等短袖款、秋冬套头与开衫款"
+      ],
+      "brand_context": null
+    },
+    "expected": {
+      "route": "reject",
+      "must_include": [],
+      "must_not_include": [
+        "上次消息",
+        "再给你介绍"
+      ]
+    }
+  },
+  {
+    "input": {
+      "case_id": "XHS-2026-0006",
+      "shop_name": "样例店铺04",
+      "xhs_account": "样例账号04",
+      "profile_url": null,
+      "account_type": "professional",
+      "shop_type": "apparel_studio",
+      "activity_note": "近30天发布7条版型分析和试衣复盘",
+      "price_level": "mid_high",
+      "business_context_note": "内容专业，适合先进行非销售型内容互动",
+      "purchase_signal_note": null,
+      "content_url": null,
+      "content_text": "同一件西装为什么肩线位置会改变整体比例，演示了两种肩线。",
+      "evidence": [
+        {
+          "evidence_id": "e1",
+          "text": "两种肩线位置对整体比例的影响",
+          "source_type": "content"
+        }
+      ],
+      "contact_mode": "cold",
+      "contact_history_note": "此前没有互动或私信",
+      "prior_outcome": "none",
+      "product_facts": [
+        "我们是毛衫工厂，为西装定制店提供西装内搭，款式不限，一件起订，一件也可以做",
+        "累计已承接过约200家不同西装定制店的业务",
+        "注重纱线、细节和做工，品质有保障",
+        "内搭是西装定制店的附加业务：客人订西装时可以一起搭配；店里只需留一件样衣，没有存货压力，有订单再下单",
+        "样衣不免费寄送；对方有意向时可按成本价购买一件，由我方邮寄",
+        "常见款式包括夏季针织polo等短袖款、秋冬套头与开衫款"
+      ],
+      "brand_context": "强调对版型和产品细节的理解"
+    },
+    "expected": {
+      "route": "comment",
+      "must_include": [],
+      "must_not_include": [
+        "微信",
+        "看主页",
+        "最低价"
+      ],
+      "acceptable_routes": [
+        "comment",
+        "dm"
+      ]
+    }
+  },
+  {
+    "input": {
+      "case_id": "XHS-2026-0007",
+      "shop_name": "样例店铺05",
+      "xhs_account": "样例账号05",
+      "profile_url": null,
+      "account_type": "personal",
+      "shop_type": "suit_custom",
+      "activity_note": "近30天发布9条，持续展示婚礼西装定制案例",
+      "price_level": "mid_high",
+      "business_context_note": "主营婚礼与商务西装定制，业务方向匹配",
+      "purchase_signal_note": "近期发布新郎衬衫与内搭搭配内容",
+      "content_url": null,
+      "content_text": "新郎西装里面的衬衫怎么选，展示了三种领型。",
+      "evidence": [
+        {
+          "evidence_id": "e1",
+          "text": "新郎衬衫三种领型搭配",
+          "source_type": "content"
+        },
+        {
+          "evidence_id": "e2",
+          "text": "对方回复暂时不需要供应商",
+          "source_type": "conversation"
+        }
+      ],
+      "contact_mode": "cold",
+      "contact_history_note": "14天前私信一次，对方回复暂时不需要",
+      "prior_outcome": "declined",
+      "product_facts": [
+        "我们是毛衫工厂，为西装定制店提供西装内搭，款式不限，一件起订，一件也可以做",
+        "累计已承接过约200家不同西装定制店的业务",
+        "注重纱线、细节和做工，品质有保障",
+        "内搭是西装定制店的附加业务：客人订西装时可以一起搭配；店里只需留一件样衣，没有存货压力，有订单再下单",
+        "样衣不免费寄送；对方有意向时可按成本价购买一件，由我方邮寄",
+        "常见款式包括夏季针织polo等短袖款、秋冬套头与开衫款"
+      ],
+      "brand_context": null
+    },
+    "expected": {
+      "route": "reject",
+      "must_include": [],
+      "must_not_include": []
+    }
+  },
+  {
+    "input": {
+      "case_id": "XHS-2026-0008",
+      "shop_name": "样例店铺06",
+      "xhs_account": "样例账号06",
+      "profile_url": null,
+      "account_type": "professional",
+      "shop_type": "suit_custom",
+      "activity_note": "近30天发布11条，更新频率高",
+      "price_level": "high",
+      "business_context_note": "主营高客单价商务西装定制，业务方向匹配",
+      "purchase_signal_note": "近期发布夏季内搭选择内容",
+      "content_url": null,
+      "content_text": "夏天穿西装里面搭什么，对比了三种内搭面料。",
+      "evidence": [
+        {
+          "evidence_id": "e1",
+          "text": "夏季西装内搭三种面料对比",
+          "source_type": "content"
+        },
+        {
+          "evidence_id": "e2",
+          "text": "私信显示已被对方拉黑",
+          "source_type": "conversation"
+        }
+      ],
+      "contact_mode": "cold",
+      "contact_history_note": "此前私信一次，之后无法再发送消息",
+      "prior_outcome": "blocked",
+      "product_facts": [
+        "我们是毛衫工厂，为西装定制店提供西装内搭，款式不限，一件起订，一件也可以做",
+        "累计已承接过约200家不同西装定制店的业务",
+        "注重纱线、细节和做工，品质有保障",
+        "内搭是西装定制店的附加业务：客人订西装时可以一起搭配；店里只需留一件样衣，没有存货压力，有订单再下单",
+        "样衣不免费寄送；对方有意向时可按成本价购买一件，由我方邮寄",
+        "常见款式包括夏季针织polo等短袖款、秋冬套头与开衫款"
+      ],
+      "brand_context": null
+    },
+    "expected": {
+      "route": "reject",
+      "must_include": [],
+      "must_not_include": []
+    }
+  }
+]
