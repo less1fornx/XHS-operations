@@ -292,3 +292,24 @@ def test_wedding_only_shop_goes_last_and_mixed_shop_is_not_penalised() -> None:
     assert both.tier == daily.tier == unknown.tier == "high"
     assert one_hint.tier == "high"          # a single wedding word is not enough to demote
     assert wedding.signals["E_scene"].value == "no" and both.signals["E_scene"].value == "yes"
+
+
+def test_profile_link_is_pulled_out_of_what_the_human_pasted() -> None:
+    from packages.agent_core.screening import normalize_profile_url
+
+    web = "https://www.xiaohongshu.com/user/profile/5f0e2e000000000000000001?xsec_token=ab-c_d%3D&xsec_source=pc_search"
+    assert normalize_profile_url(f"  {web} ") == web
+    assert normalize_profile_url("我在小红书发现了一家店 http://xhslink.com/m/AbC123 ，复制后打开") == "https://xhslink.com/m/AbC123"
+    assert normalize_profile_url("https://www.xiaohongshu.com/user/profile/5f0e2e01）") == "https://www.xiaohongshu.com/user/profile/5f0e2e01"
+    # A note page, another site, or a 小红书号 is not a profile link.
+    assert normalize_profile_url("https://www.xiaohongshu.com/explore/66aa") == ""
+    assert normalize_profile_url("https://example.com/user/profile/1") == ""
+    assert normalize_profile_url("e2e_shop_01") == ""
+    assert normalize_profile_url(None) == ""
+
+
+def test_profile_link_stays_with_the_shop_when_the_list_is_re_ranked() -> None:
+    results = [{"shop_key": "shop_0", "status": "read", "extraction": shop().model_dump(),
+                "profile_url": "https://xhslink.com/m/AbC123"}]
+    ranked = rank_results(results, TODAY, lambda name, xhs_id="": False, 5, 3)
+    assert ranked[0]["profile_url"] == "https://xhslink.com/m/AbC123"

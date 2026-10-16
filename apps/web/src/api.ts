@@ -22,6 +22,27 @@ function askForCode(rejected: string): Promise<boolean> {
 }
 
 // Works on plain http pages too, where navigator.clipboard is unavailable.
+// Copy inside the click itself. Once a new tab has taken the focus, or a request has been
+// awaited, browsers refuse clipboard writes, so "send now" must call this before either.
+export function copyDuringClick(text: string): Promise<boolean> {
+  if (copyWithSelection(text)) return Promise.resolve(true)
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text).then(() => true, () => false)
+  return Promise.resolve(false)
+}
+
+function copyWithSelection(text: string): boolean {
+  const area = document.createElement('textarea')
+  area.value = text
+  area.style.position = 'fixed'
+  area.style.opacity = '0'
+  document.body.appendChild(area)
+  area.select()
+  let ok = false
+  try { ok = document.execCommand('copy') } catch { ok = false }
+  area.remove()
+  return ok
+}
+
 export async function copyToClipboard(text: string): Promise<boolean> {
   try {
     if (navigator.clipboard && window.isSecureContext) {
@@ -29,15 +50,7 @@ export async function copyToClipboard(text: string): Promise<boolean> {
       return true
     }
   } catch { /* fall through to the legacy path */ }
-  const area = document.createElement('textarea')
-  area.value = text
-  area.style.position = 'fixed'
-  area.style.opacity = '0'
-  document.body.appendChild(area)
-  area.select()
-  const ok = document.execCommand('copy')
-  area.remove()
-  return ok
+  return copyWithSelection(text)
 }
 
 // Header values must be ASCII, so free text is reduced to a short hash.

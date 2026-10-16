@@ -129,3 +129,5 @@ PYTHONPATH=. uv run python -m services.worker.evaluate_phase2 --provider qwen
 
 评测报告保存到 `outputs/`。Phase 2 学习步骤见
 [docs/phase2-agent-design-learning.md](docs/phase2-agent-design-learning.md)。
+想用可视化方式理解从截图、规则、LLM 到人工反馈的数据流，可打开
+[Agent 数据流学习页](docs/agent-data-flow.html)。

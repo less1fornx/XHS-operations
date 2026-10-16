@@ -7,14 +7,16 @@ __pycache__/
 node_modules/
 dist/
 .next/
-data/*.db
-data/*.sqlite
+/data/
 data/uploads/
 *.log
 
 .DS_Store
 .tmp/
 outputs/*.ndjson
+outputs/*qwen*.json
+outputs/acceptance-eval-*.json
+evals/*-draft.json
 data/*.sqlite-shm
 data/*.sqlite-wal
 data/*.db-shm

@@ -35,6 +35,7 @@ type Screening = {
 
 type ShopResult = {
   shop_key: string
+  profile_url?: string
   image_paths: string[]
   status: 'read' | 'failed'
   error?: string
@@ -192,7 +193,7 @@ export default function ScreeningView({ onOpenWorkflow }: { onOpenWorkflow: () =
       setBusy(false)
     }
   }
-  const correct = async (key: string, change: { shop_type?: string; xhs_id?: string }) => {
+  const correct = async (key: string, change: { shop_type?: string; xhs_id?: string; profile_url?: string }) => {
     if (!batch) return
     setBusy(true)
     setError('')
@@ -270,7 +271,7 @@ export default function ScreeningView({ onOpenWorkflow }: { onOpenWorkflow: () =
         </div>
         <p className="muted">
           共 {batch.results.length} 家：{(['high', 'medium', 'low', 'excluded'] as const).map((tier) => `${tierLabel[tier]} ${batch.ranked.filter((item) => item.screening?.tier === tier).length}`).join(' · ')} · 读取失败 {failed.length}。
-          今日剩余配额：私信 {batch.dm_slots}，评论 {batch.comment_slots}。先后顺序由规则 {batch.ranked[0]?.screening?.rules_version || 'v0'} 计算：先看能不能联系，再按“价格看得见且够高、最近有更新”排先后。它只是帮你决定先看谁，不代表成交的可能性。
+          到今天的上限前还能排：私信 {batch.dm_slots} 条，评论 {batch.comment_slots} 条（超过基线时会先提醒你）。先后顺序由规则 {batch.ranked[0]?.screening?.rules_version || 'v0'} 计算：先看能不能联系，再按“价格看得见且够高、最近有更新”排先后。它只是帮你决定先看谁，不代表成交的可能性。
         </p>
 
         {failed.length > 0 && <div className="failure-box">
@@ -297,6 +298,7 @@ export default function ScreeningView({ onOpenWorkflow }: { onOpenWorkflow: () =
                 <span className={`badge ${tierBadge[s.tier]}`}>{tierLabel[s.tier]}</span>
               </header>
               <label className="id-row">小红书号{locked ? <span>{e.xhs_id || '未识别'}</span> : <input key={e.xhs_id || ''} defaultValue={e.xhs_id || ''} placeholder="截图里没有，可手动填写" onBlur={(event) => { if (event.target.value.trim() !== (e.xhs_id || '')) void correct(item.shop_key, { xhs_id: event.target.value.trim() }) }} />}</label>
+              {s.tier !== 'excluded' && <label className="id-row">主页地址{locked ? <span>{item.profile_url ? '已填' : '未填'}</span> : <input key={item.profile_url || ''} defaultValue={item.profile_url || ''} placeholder="粘贴对方主页的地址，发送时一键打开" title="电脑上复制对方主页的地址栏；手机上在对方主页点“分享—复制链接”" onBlur={(event) => { if (event.target.value.trim() !== (item.profile_url || '')) void correct(item.shop_key, { profile_url: event.target.value.trim() }) }} />}</label>}
               {!locked && s.tier !== 'excluded' && !e.xhs_id && <small className="id-hint">没读到小红书号，请对照主页填上（企业号在主页右上角“···”或分享里）。不填则按店名识别，可能认错。</small>}
               {!locked && !!e.xhs_id && !/^[A-Za-z0-9_.-]{4,30}$/.test(e.xhs_id) && <p className="unclear">这个小红书号的格式看起来不对，请对照截图核对。</p>}
               <div className="thumbs">{item.image_paths.map((path) => <a href={imageUrl(path)} target="_blank" rel="noreferrer" key={path}><img src={imageUrl(path)} alt="截图" onError={(event) => { event.currentTarget.replaceWith(Object.assign(document.createElement('span'), { className: 'muted', textContent: '原图已删除' })) }} /></a>)}</div>

@@ -6,6 +6,8 @@ from typing import Any
 
 from sqlmodel import Session, select
 
+from packages.agent_core.style import shared_share
+
 from ..models import (
     AuditLog,
     OutreachTask,
@@ -16,6 +18,15 @@ from ..models import (
 from .base import DEFAULT_ACCOUNT_ID, LOCAL_ZONE, BusinessRuleError, utc_now, StoreBase
 
 
+# User decision 2026-10-08: past the baseline the reviewer is told and decides whether to go on;
+# only the ceiling refuses. A degraded account lowers the baseline, not the ceiling. The comment
+# numbers follow the DM ones in proportion and are not yet confirmed by the user.
+BASELINE = {"dm": 10, "comment": 6}
+DEGRADED_BASELINE = {"dm": 2, "comment": 1}
+CEILING = {"dm": 20, "comment": 12}
+CHANNEL_ZH = {"dm": "私信", "comment": "评论"}
+
+
 class QuotaMixin(StoreBase):
     """Daily quota, account state and risk events."""
 
@@ -24,14 +35,15 @@ class QuotaMixin(StoreBase):
         with Session(self.engine) as session:
             account = self._ensure_account(session)
             usage = self._get_usage(session, today)
-            dm_limit, comment_limit = self._effective_limits(account)
+            baseline = self._baseline(account)
             return {
                 "account_id": account.id,
                 "status": account.status,
                 "freeze_reason": account.freeze_reason,
                 "date": today.isoformat(),
-                "dm": {"used": usage.dm_new_count, "limit": dm_limit},
-                "comment": {"used": usage.comment_new_count, "limit": comment_limit},
+                # "limit" is the baseline: going past it needs the reviewer's say-so. "ceiling" refuses.
+                "dm": {"used": usage.dm_new_count, "limit": baseline["dm"], "ceiling": CEILING["dm"]},
+                "comment": {"used": usage.comment_new_count, "limit": baseline["comment"], "ceiling": CEILING["comment"]},
             }
 
     def reserve_quota(
@@ -40,8 +52,12 @@ class QuotaMixin(StoreBase):
         task_id: str,
         channel: str,
         message_text: str | None = None,
+        confirm_over_baseline: bool = False,
     ) -> dict[str, Any]:
-        """Reserve one daily outreach slot before the graph enters scheduled."""
+        """Reserve one daily outreach slot before the graph enters scheduled.
+
+        Past the baseline this raises `over_baseline` with the numbers the reviewer needs;
+        the caller asks them and calls again with `confirm_over_baseline=True`."""
         if channel not in ("dm", "comment"):
             raise BusinessRuleError("invalid_channel", "只有 DM 或评论任务可以占用配额")
 
@@ -76,31 +92,41 @@ class QuotaMixin(StoreBase):
 
             today = datetime.now(LOCAL_ZONE).date()
             normalized_message = self._normalize_message(message_text)
+            todays_texts: list[str] = []
             if normalized_message:
                 same_day_tasks = session.exec(
                     select(OutreachTask).where(
                         OutreachTask.platform_account_id == DEFAULT_ACCOUNT_ID,
                         OutreachTask.quota_date == today,
                         OutreachTask.quota_reserved == True,  # noqa: E712
-                        OutreachTask.status.in_(active_statuses),
                     )
                 )
                 for existing in same_day_tasks:
                     existing_text = self._normalize_message(existing.final_text or existing.draft_text)
+                    if existing_text:
+                        # Similarity looks at everything lined up today, also what was already answered.
+                        todays_texts.append(existing_text)
+                    if existing.status not in active_statuses:
+                        continue
                     if existing_text and existing_text == normalized_message:
                         raise BusinessRuleError(
                             "duplicate_content",
                             "当天已有完全相同的触达文案，请基于当前内容重新编辑",
                         )
             usage = self._get_usage(session, today)
-            dm_limit, comment_limit = self._effective_limits(account)
-            limit = dm_limit if channel == "dm" else comment_limit
+            baseline, ceiling, name = self._baseline(account)[channel], CEILING[channel], CHANNEL_ZH[channel]
             used = usage.dm_new_count if channel == "dm" else usage.comment_new_count
-            if used >= limit:
-                raise BusinessRuleError(
-                    "quota_exceeded",
-                    f"今日{('私信' if channel == 'dm' else '评论')}配额已用完",
-                )
+            if used >= ceiling:
+                raise BusinessRuleError("quota_exceeded", f"今天已排 {used} 条{name}，到了上限 {ceiling} 条，不能再加")
+            over = used >= baseline
+            similarity = shared_share(normalized_message, todays_texts) if todays_texts else None
+            if over and not confirm_over_baseline:
+                parts = [f"今天已排 {used} 条{name}，这会是第 {used + 1} 条，超过了基线 {baseline} 条（上限 {ceiling} 条）。"]
+                if account.status == "degraded":
+                    parts.append(f"账号出过异常，处于降级状态，所以基线是 {baseline} 条。")
+                if similarity is not None:
+                    parts.append(f"这条文案有 {round(similarity * 100)}% 的内容和今天已排的 {len(todays_texts)} 条相同。")
+                raise BusinessRuleError("over_baseline", "".join(parts))
 
             if channel == "dm":
                 usage.dm_new_count += 1
@@ -117,7 +143,14 @@ class QuotaMixin(StoreBase):
                     entity_type="outreach_task",
                     entity_id=task.id,
                     after_json=json.dumps(
-                        {"channel": channel, "date": today.isoformat()}, ensure_ascii=False
+                        {
+                            "channel": channel,
+                            "date": today.isoformat(),
+                            "count_today": used + 1,
+                            "over_baseline_confirmed": over,
+                            "similarity_to_today": similarity,
+                        },
+                        ensure_ascii=False,
                     ),
                     trace_id=run_id,
                 )
@@ -181,10 +214,8 @@ class QuotaMixin(StoreBase):
         return usage
 
     @staticmethod
-    def _effective_limits(account: PlatformAccount) -> tuple[int, int]:
-        if account.status == "degraded":
-            return min(account.dm_daily_limit, 2), min(account.comment_daily_limit, 1)
-        return account.dm_daily_limit, account.comment_daily_limit
+    def _baseline(account: PlatformAccount) -> dict[str, int]:
+        return DEGRADED_BASELINE if account.status == "degraded" else BASELINE
 
     @staticmethod
     def _normalize_message(value: str | None) -> str:

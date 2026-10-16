@@ -167,11 +167,42 @@ def test_first_message_style_checks_catch_the_old_template() -> None:
     )
     issues = first_message_style_issues(old, "store_account")
     assert any("主动权" in issue for issue in issues)
-    assert any("罗列" in issue for issue in issues)
     assert any("夸奖" in issue for issue in issues)
 
-    new = "看到你用LP羊绒法兰绒做的那套美拉德西装，驳头的弧度很少见。我们是做西装内搭的毛衫工厂，这种厚度的法兰绒，你一般让客人里面配高领还是开衫？"
+    new = (
+        "贵店笔记里那件驼色法兰绒单西，写到入秋就能穿。法兰绒里面那一层也得压得住，我们是做高端面料内搭的源头工厂，"
+        "也对接了约200家西装定制店，想和贵店合作西装内搭，一件起订，方便的话发几款给您看看。"
+    )
     assert first_message_style_issues(new, "personal_shop") == []
+
+
+def test_style_checks_follow_the_v9_structure() -> None:
+    from packages.agent_core.style import first_message_style_issues
+
+    # The v8 shape: "你", no strength, ends on a pairing question.
+    v8 = "看到你用LP羊绒法兰绒做的那套美拉德西装，驳头的弧度很少见。我们是做西装内搭的毛衫工厂，这种厚度的法兰绒，你一般让客人里面配高领还是开衫？"
+    issues = first_message_style_issues(v8, "personal_shop")
+    assert any("“你”" in issue for issue in issues)
+    assert any("问句" in issue for issue in issues)
+    assert any("实力" in issue for issue in issues)
+    assert any("想合作" in issue for issue in issues)
+
+    # Praise for the shop's fabric is not our strength; only what follows "我们" counts.
+    theirs = "贵店选的高端面料和做工都摆在笔记里。我们是做西装内搭的毛衫工厂，想和贵店合作西装内搭。"
+    assert any("实力" in issue for issue in first_message_style_issues(theirs))
+    star = "贵店给明星艺人做的造型很多。我们是做西装内搭的毛衫工厂，注重纱线和做工，想和贵店合作西装内搭。"
+    assert any("明星" in issue for issue in first_message_style_issues(star))
+
+
+def test_mock_draft_passes_the_checks_it_is_drafted_for() -> None:
+    from packages.agent_core.pipeline import generate_lead_suggestion
+    from packages.agent_core.providers import MockProvider
+    from packages.agent_core.style import first_message_style_issues
+    from services.worker.lead_generation import build_agent_input, load_product_facts
+
+    state = {"shop_name": "店", "video_text": "海军蓝三件套", "workflow_run_id": "r"}
+    result = generate_lead_suggestion(build_agent_input(state, load_product_facts(), "dm"), MockProvider())
+    assert first_message_style_issues(result.output.draft) == []
 
 
 def test_audience_is_decided_by_the_program() -> None:
@@ -200,3 +231,99 @@ def test_style_check_flags_a_wedding_opening() -> None:
 
     draft = "看到贵店的新郎西服和备婚攻略。我们是做西装内搭的毛衫工厂，这类礼服客人一般怎么搭？"
     assert any("婚礼" in issue for issue in first_message_style_issues(draft, "store_account"))
+
+
+def test_style_check_flags_a_sentence_copied_from_the_prompt_examples() -> None:
+    from packages.agent_core.style import first_message_style_issues
+
+    ours = "我们是做西装内搭的毛衫工厂，同样注重纱线、细节和做工，想和贵店合作西装内搭。"
+    copied = "看到贵店那件驼色法兰绒单西。这样的西装，配的内搭也不能将就，" + ours
+    own = "看到贵店那件驼色法兰绒单西。法兰绒里面那一层也得压得住，" + ours
+    assert any("照抄" in issue and "配的内搭也不能将就" in issue for issue in first_message_style_issues(copied))
+    # The part about us repeats the prompt's wording on purpose and must not be flagged.
+    assert first_message_style_issues(own) == []
+
+
+def test_strengths_are_drawn_by_the_program_and_checked() -> None:
+    from packages.agent_core.style import first_message_style_issues, load_positionings, pick_strengths
+    from services.worker.lead_generation import strengths_for
+
+    every = [item["text"] for item in load_positionings()["suit_inner"]["strengths"]]
+    draws = [pick_strengths(f"run-{i}") for i in range(200)]
+    # The same run always gets the same set, so a rewrite does not change what it must say.
+    assert pick_strengths("run-7") == pick_strengths("run-7")
+    assert {len(draw) for draw in draws} == {1, 2}
+    assert {text for draw in draws for text in draw} == set(every)
+    assert strengths_for({"workflow_run_id": "run-7", "contact_basis": "prior_conversation"}) == []
+
+    opening = "看到贵店那件驼色法兰绒单西。法兰绒里面那一层也得压得住，"
+    only_fabric = opening + "我们是做西装内搭的毛衫工厂，做的是高端面料的内搭，想和贵店合作西装内搭。"
+    assert first_message_style_issues(only_fabric, strengths=["做高端面料的内搭"]) == []
+    wrong = first_message_style_issues(only_fabric, strengths=["累计对接约200家西装定制店"])
+    assert any("没有写这一条指定的实力" in issue and "200" in issue for issue in wrong)
+    assert any("写了没有指定的实力" in issue and "高端面料" in issue for issue in wrong)
+    bridged = "看到贵店那件驼色法兰绒单西。这样的料子，要同样注重纱线、细节和做工的内搭来配，我们是做西装内搭的毛衫工厂，想和贵店合作西装内搭。"
+    assert first_message_style_issues(bridged, strengths=["注重纱线、细节和做工"]) == []
+
+
+def test_positioning_is_forced_by_shop_type() -> None:
+    """User rule 2026-10-09: a suit shop hears about suit inner layers, any other account
+    hears that we are a flat-knitting factory. The program decides and checks; the model does not."""
+    from packages.agent_core.style import first_message_style_issues, pick_strengths, positioning_for
+    from services.worker.lead_generation import build_agent_input, load_product_facts
+
+    assert positioning_for("suit_custom") == "suit_inner"
+    for other in ("menswear", "apparel_studio", "content_creator", "staff_account", "hobbyist", "supplier", "other"):
+        assert positioning_for(other) == "flat_knit"
+
+    facts = load_product_facts()
+    suit = build_agent_input({"workflow_run_id": "r1", "shop_name": "某西装店", "video_text": "炭灰法兰绒单西", "shop_type": "suit_custom"}, facts, "dm")
+    brand = build_agent_input({"workflow_run_id": "r1", "shop_name": "某品牌", "video_text": "秋季上新工装外套", "shop_type": "menswear"}, facts, "dm")
+    assert suit.positioning == "suit_inner" and suit.self_description == "做西装内搭(横机·针织·POLO)的源头工厂"
+    assert brand.positioning == "flat_knit" and brand.self_description == "专门做横机针织的工厂"
+    # Every knit message carries both points; the suit one draws from its own three.
+    assert brand.strengths_to_use == ["有严谨的工艺流程确保产品质量", "产品售后有保障"]
+    assert all("工艺" not in text and "售后" not in text for text in suit.strengths_to_use)
+
+    for agent_input in (suit, brand):
+        draft = MockProvider().generate(agent_input, build_prompt(agent_input)).output.draft
+        assert first_message_style_issues(draft, strengths=agent_input.strengths_to_use, positioning=agent_input.positioning) == []
+
+    opening = "看到贵店新出的那件灯芯绒夹克。往后要加针织款可以交给我们，"
+    knit = opening + "我们是专门做横机针织的工厂，工艺流程严谨、质量有保证，售后也有保障，想和贵店合作针织款，一件起订。"
+    knit_strengths = pick_strengths("any", "flat_knit")
+    assert first_message_style_issues(knit, strengths=knit_strengths, positioning="flat_knit") == []
+    # The suit introduction sent to a non-suit account is caught, and the other way round.
+    crossed = opening + "我们是做西装内搭(横机·针织·POLO)的源头工厂，工艺流程严谨，售后有保障，想和贵店合作西装内搭。"
+    issues = first_message_style_issues(crossed, strengths=knit_strengths, positioning="flat_knit")
+    assert any("自称没有按指定的写" in issue for issue in issues) and any("西装内搭" in issue for issue in issues)
+    assert any("自称没有按指定的写" in issue for issue in first_message_style_issues(knit, positioning="suit_inner"))
+    old_self = "看到贵店那件驼色法兰绒单西。法兰绒里面那一层也得压得住，我们是做西装内搭的源头工厂，想和贵店合作西装内搭。"
+    assert any("横机·针织·POLO" in issue for issue in first_message_style_issues(old_self, positioning="suit_inner"))
+
+
+def test_passing_judgement_on_the_shop_is_flagged() -> None:
+    """User 2026-10-09: say what we saw, do not rate the shop or tell it what it demands."""
+    from packages.agent_core.style import first_message_style_issues
+
+    ours = "我们是做西装内搭的毛衫工厂，注重纱线、细节和做工，想和贵店合作西装内搭。"
+    for verdict in ("这种材质对触感和做工要求极高，", "把职场绅士的氛围感拿捏得很准，", "对面料确实讲究，", "纹理细节很清晰，"):
+        issues = first_message_style_issues("看到您安利的羊绒丝混纺面料，" + verdict + ours)
+        assert any("下了评价" in issue for issue in issues), verdict
+    # The shop's own words, quoted, are not our verdict; a plain statement of what we saw is fine.
+    quoted = "看到贵店写的“这块料子很高级，做工要求很高”那条笔记。这样的料子里面也要配得上，" + ours
+    assert first_message_style_issues(quoted) == []
+
+
+def test_two_evidence_ids_in_one_field_are_accepted() -> None:
+    from packages.agent_core.contracts import validate_evidence_refs
+
+    from services.worker.lead_generation import build_agent_input, load_product_facts
+
+    state = {"workflow_run_id": "r1", "shop_name": "某店", "video_text": "炭灰法兰绒单西", "shop_note": "上海手工西装定制"}
+    agent_input = build_agent_input(state, load_product_facts(), "dm")
+    known = [item.evidence_id for item in agent_input.evidence]
+    output = MockProvider().generate(agent_input, build_prompt(agent_input)).output
+    joined = output.model_copy(update={"evidence_refs": [",".join(known + known[:1])]})
+    assert validate_evidence_refs(agent_input, joined) == []
+    assert validate_evidence_refs(agent_input, output.model_copy(update={"evidence_refs": [known[0] + "，e99"]})) == ["e99"]

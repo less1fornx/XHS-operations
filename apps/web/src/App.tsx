@@ -19,18 +19,20 @@ import {
   ShieldCheck,
   UserRound,
   X,
+  ExternalLink,
 } from 'lucide-react'
 import './App.css'
-import { api, copyToClipboard, keyPart } from './api'
+import { api, copyDuringClick, copyToClipboard, keyPart } from './api'
 import ScreeningView from './Screening'
 import ReplyPanel, { type ReplyState } from './Reply'
 import ProgressView from './Progress'
 import WorkLogView from './WorkLog'
+import RevisitView, { type Revisits } from './Revisit'
 
 type Channel = 'dm' | 'comment' | 'none'
 type ContactBasis = 'cold_outreach' | 'prior_conversation' | 'inbound_inquiry' | 'explicit_permission'
 type Stage = 'route_review' | 'content_review' | 'scheduled' | 'opened' | 'sent' | 'failed' | 'read_no_reply' | 'blocked'
-type View = 'progress' | 'screening' | 'workflow' | 'worklog' | 'risk'
+type View = 'progress' | 'screening' | 'workflow' | 'worklog' | 'revisit' | 'risk'
 type ShopType = 'suit_custom' | 'menswear' | 'apparel_studio' | 'content_creator' | 'staff_account' | 'hobbyist' | 'supplier' | 'other'
 
 type Run = {
@@ -63,7 +65,7 @@ type Run = {
     model_product_match?: string[]
     model_uncertainties?: string[]
     model_quality_flags?: string[]
-    model_meta?: { provider?: string; model?: string; prompt_version?: string; latency_ms?: number }
+    model_meta?: { provider?: string; model?: string; prompt_version?: string; latency_ms?: number; positioning?: string }
     evidence?: string[]
     reply?: ReplyState
   }
@@ -75,8 +77,8 @@ type Summary = {
   status: string
   date: string
   freeze_reason?: string | null
-  dm: { used: number; limit: number }
-  comment: { used: number; limit: number }
+  dm: { used: number; limit: number; ceiling: number }
+  comment: { used: number; limit: number; ceiling: number }
 }
 
 type RiskEvent = {
@@ -124,6 +126,13 @@ function localNow(): string {
 function shopUrl(run: Run): string {
   // Search by 小红书号 when we have it: names repeat, the id points at one account.
   return run.state.profile_url || `https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(run.state.xhs_id || run.state.shop_name)}`
+}
+
+// How we introduce ourselves is set by the server from the shop type; the page only names it.
+const positioningLabel: Record<string, string> = { suit_inner: '西装内搭工厂', flat_knit: '横机针织工厂' }
+
+function shopLinkLabel(run: Run): string {
+  return run.state.profile_url ? '打开对方主页' : run.state.xhs_id ? `搜索小红书号 ${run.state.xhs_id}` : '按店名搜索这家店'
 }
 
 // Browsers only allow a new tab opened directly by the click, so open it first
@@ -177,6 +186,8 @@ function App() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   // When "send now" was pressed for a run, so we can ask after two minutes.
+  const [revisitDue, setRevisitDue] = useState(0)
+  const [copyFailed, setCopyFailed] = useState<Record<string, boolean>>({})
   const [sendStartedAt, setSendStartedAt] = useState<Record<string, number>>({})
   const [clock, setClock] = useState(() => Date.now())
 
@@ -197,6 +208,8 @@ function App() {
       api<Summary>('/api/account/summary'),
       api<RiskEvent[]>('/api/risk-events'),
     ])
+    // The count beside "定时巡回" must show without opening that page.
+    api<Revisits>('/api/revisits').then((data) => setRevisitDue(data.due.length)).catch(() => {})
     setRuns(nextRuns)
     setSummary(nextSummary)
     setRiskEvents(nextRiskEvents)
@@ -275,6 +288,7 @@ function App() {
   }
 
   const copyText = async (text: string) => {
+    if (selected) setCopyFailed((current) => ({ ...current, [selected.id]: false }))
     setNotice(await copyToClipboard(text) ? '文案已复制，可以直接粘贴到小红书' : '浏览器不允许自动复制，请手动选中文案复制')
   }
 
@@ -311,11 +325,23 @@ function App() {
     }))
   }
 
-  const submitContent = (run: Run, approved: boolean, when: string) => api<Run>(`/api/runs/${run.id}/content`, {
+  const postContent = (run: Run, approved: boolean, when: string, confirmed: boolean) => api<Run>(`/api/runs/${run.id}/content`, {
     method: 'POST',
-    headers: { 'Idempotency-Key': `content-${run.id}-${approved}-${keyPart(draft)}-${keyPart(when)}` },
-    body: JSON.stringify({ approved, edited_text: draft, scheduled_for: when || null, edit_reasons: editReasons, edit_note: editNote || null }),
+    headers: { 'Idempotency-Key': `content-${run.id}-${approved}-${keyPart(draft)}-${keyPart(when)}-${confirmed}` },
+    body: JSON.stringify({ approved, edited_text: draft, scheduled_for: when || null, edit_reasons: editReasons, edit_note: editNote || null, confirm_over_baseline: confirmed }),
   })
+
+  // Past today's baseline the server refuses once and says why; the reviewer decides whether to go on.
+  const submitContent = async (run: Run, approved: boolean, when: string) => {
+    try {
+      return await postContent(run, approved, when, false)
+    } catch (cause) {
+      const reminder = cause instanceof Error && cause.message.startsWith('over_baseline: ') ? cause.message.slice('over_baseline: '.length) : ''
+      if (!reminder) throw cause
+      if (!window.confirm(`${reminder}\n\n点“确定”继续排这一条；点“取消”先不排，可以改文案或明天再发。`)) throw new Error('已取消：这一条没有排进今天，文案还在。')
+      return postContent(run, approved, when, true)
+    }
+  }
 
   const markOpened = (run: Run) => api<Run>(`/api/runs/${run.id}/open`, {
     method: 'POST',
@@ -344,34 +370,40 @@ function App() {
 
   // The system never sends. "Send now" approves the text, copies it, opens the
   // shop page if we have its address, and then waits for the human to confirm.
-  const beginSending = async (run: Run, text: string, tab: Window | null) => {
-    await copyText(text)
+  const beginSending = async (run: Run, copied: Promise<boolean>, tab: Window | null) => {
     if (tab) tab.location.href = shopUrl(run)
+    const ok = await copied
+    setCopyFailed((current) => ({ ...current, [run.id]: !ok }))
+    setNotice(ok ? '文案已复制，可以直接粘贴到小红书' : '没能自动复制文案，请点“复制文案”后再去粘贴')
     setSendStartedAt((current) => ({ ...current, [run.id]: Date.now() }))
     setClock(Date.now())
     setFilter('sending')
   }
 
+  const saveProfileUrl = (run: Run, value: string) => runAction(() => api<Run>(`/api/runs/${run.id}/profile-url`, { method: 'POST', body: JSON.stringify({ profile_url: value }) }))
+
   const sendNow = async () => {
     if (!selected) return
-    const text = draft
     const run = selected
+    // Copy first: after the new tab opens this page no longer has the focus and the browser refuses.
+    const copied = copyDuringClick(draft)
     const tab = reserveTab()
     const next = await runAction(async () => {
       const approved = await submitContent(run, true, localNow())
       if (approved.stage !== 'scheduled') return approved
       return markOpened(approved)
     })
-    if (next?.stage === 'opened') await beginSending(next, text, tab)
+    if (next?.stage === 'opened') await beginSending(next, copied, tab)
     else tab?.close()
   }
 
   const startScheduled = async () => {
     if (!selected) return
     const run = selected
+    const copied = copyDuringClick(run.state.draft || '')
     const tab = reserveTab()
     const next = await runAction(() => markOpened(run))
-    if (next?.stage === 'opened') await beginSending(next, next.state.draft || '', tab)
+    if (next?.stage === 'opened') await beginSending(next, copied, tab)
     else tab?.close()
   }
 
@@ -447,6 +479,7 @@ function App() {
           <button className={`nav-item ${view === 'screening' ? 'active' : ''}`} type="button" onClick={() => setView('screening')}><Images size={16} />批量初筛</button>
           <button className={`nav-item ${view === 'workflow' ? 'active' : ''}`} type="button" onClick={() => setView('workflow')}><Inbox size={16} />候选工作流{counts.todo + counts.sending > 0 && <span className="nav-count" title="等你处理或等你发送的任务数">{counts.todo + counts.sending}</span>}</button>
           <button className={`nav-item ${view === 'worklog' ? 'active' : ''}`} type="button" onClick={() => setView('worklog')}><FileText size={16} />工作记录</button>
+          <button className={`nav-item ${view === 'revisit' ? 'active' : ''}`} type="button" onClick={() => setView('revisit')}><RefreshCw size={16} />定时巡回{revisitDue > 0 && <span className="nav-count" title="到了回访时间、等你决定的店">{revisitDue}</span>}</button>
           <button className={`nav-item ${view === 'risk' ? 'active' : ''}`} type="button" onClick={() => setView('risk')}><FileText size={16} />风险记录</button>
         </nav>
         <div className="sidebar-footer"><CircleDot size={12} /><span>本地模式</span><small>发送由人工完成</small></div>
@@ -454,10 +487,10 @@ function App() {
 
       <main className="main-content">
         <header className="topbar">
-          <div><p className="eyebrow">小红书 · 个人号</p><h1>{view === 'progress' ? '进度与反馈' : view === 'screening' ? '批量初筛' : view === 'workflow' ? '候选工作流' : view === 'worklog' ? '工作记录' : '风险记录'}</h1></div>
+          <div><p className="eyebrow">小红书 · 个人号</p><h1>{view === 'progress' ? '进度与反馈' : view === 'screening' ? '批量初筛' : view === 'workflow' ? '候选工作流' : view === 'worklog' ? '工作记录' : view === 'revisit' ? '定时巡回' : '风险记录'}</h1></div>
           <div className="quota-strip">
-            <div><span>今日私信</span><strong>{summary ? `${summary.dm.used}/${summary.dm.limit}` : '--'}</strong></div>
-            <div><span>今日评论</span><strong>{summary ? `${summary.comment.used}/${summary.comment.limit}` : '--'}</strong></div>
+            <div><span>今日私信</span><strong className={summary && summary.dm.used >= summary.dm.limit ? 'over-baseline' : ''} title={summary ? `超过 ${summary.dm.limit} 条先提醒，${summary.dm.ceiling} 条封顶` : ''}>{summary ? `${summary.dm.used}/${summary.dm.limit}` : '--'}</strong></div>
+            <div><span>今日评论</span><strong className={summary && summary.comment.used >= summary.comment.limit ? 'over-baseline' : ''} title={summary ? `超过 ${summary.comment.limit} 条先提醒，${summary.comment.ceiling} 条封顶` : ''}>{summary ? `${summary.comment.used}/${summary.comment.limit}` : '--'}</strong></div>
             <div className="health"><span className={`status-dot ${frozen ? 'danger-dot' : ''}`}></span>{frozen ? '队列冻结' : '账号正常'}</div>
             <button className="icon-button" title="刷新数据" type="button" onClick={() => refresh().catch((cause: Error) => setError(cause.message))}><RefreshCw size={15} /></button>
           </div>
@@ -515,7 +548,10 @@ function App() {
             {!selected && <div className="empty-state"><PauseCircle size={30} /><p>从左边选一条任务，这里会显示它的建议、文案和下一步操作。</p></div>}
             {selected && <>
               <div className="panel-heading">
-                <div><p className="section-kicker">{channelLabel[selected.state.channel || selected.state.suggested_channel || ''] || '待定'}</p><h2>{selected.state.shop_name}</h2><small className="muted">{selected.state.xhs_id ? `小红书号：${selected.state.xhs_id}` : '没有小红书号，发送时按店名搜索，可能需要你在结果里找'}</small></div>
+                <div><p className="section-kicker">{channelLabel[selected.state.channel || selected.state.suggested_channel || ''] || '待定'}</p><h2>{selected.state.shop_name}</h2><small className="muted">{selected.state.xhs_id ? `小红书号：${selected.state.xhs_id}` : selected.state.profile_url ? '没有小红书号' : '没有小红书号，发送时按店名搜索，可能需要你在结果里找'}</small>
+                  {!!selected.state.model_meta?.positioning && <small className="muted positioning-note">我方定位：{positioningLabel[selected.state.model_meta.positioning] || selected.state.model_meta.positioning}（按店铺类型自动决定）</small>}
+                  <label className="id-row profile-row">主页地址<input key={`${selected.id}:${selected.state.profile_url || ''}`} defaultValue={selected.state.profile_url || ''} placeholder="粘贴对方主页的地址，之后可以一键打开" onBlur={(event) => { const value = event.target.value.trim(); if (value !== (selected.state.profile_url || '')) void saveProfileUrl(selected, value) }} /></label>
+                  <a className="link-button" href={shopUrl(selected)} target="_blank" rel="noreferrer"><ExternalLink size={13} />{shopLinkLabel(selected)}</a></div>
                 <span className={`badge ${stageBadge[selected.stage] || 'neutral'}`}>{stageLabel[selected.stage] || selected.stage}</span>
               </div>
               {selected.state.contact_history && <div className="status-card warn"><AlertTriangle size={18} /><div><strong>这个账号以前联系过</strong><p>上次联系：{new Date(selected.state.contact_history.last_touched_at).toLocaleDateString('zh-CN')}。请确认是否要再次联系。</p></div></div>}
@@ -546,7 +582,7 @@ function App() {
                 <div className="send-options">
                   <div className="send-option primary">
                     <strong>现在就去发</strong>
-                    <p>文案会自动复制，并在新标签页{selected.state.profile_url ? '打开对方主页' : selected.state.xhs_id ? '按小红书号搜索这家店' : '按店名搜索这家店'}，你粘贴发送后回来确认结果。</p>
+                    <p>文案会自动复制，并在新标签页{selected.state.profile_url ? '打开对方主页，点“关注”右边的对话气泡进入私信，粘贴发送后' : selected.state.xhs_id ? '按小红书号搜索这家店，你粘贴发送后' : '按店名搜索这家店，你粘贴发送后'}回来确认结果。</p>
                     <button className="primary-button" type="button" disabled={busy || !draft.trim() || frozen} onClick={() => void sendNow()}><Send size={14} />通过并现在去发</button>
                   </div>
                   <div className="send-option">
@@ -567,7 +603,7 @@ function App() {
               </div>}
 
               {selected.stage === 'opened' && <div className="decision-content">
-                <div className={`status-card ${minutesSending !== null && minutesSending >= 2 ? 'warn' : 'info'}`}><Send size={18} /><div><strong>{minutesSending !== null && minutesSending >= 2 ? `已经过去 ${minutesSending} 分钟，发送成功了吗？` : '发送成功了吗？'}</strong><p>请在小红书里把文案发出去，然后回来点下面的按钮。</p><a className="link-button" href={shopUrl(selected)} target="_blank" rel="noreferrer">{selected.state.profile_url ? '再次打开对方主页' : selected.state.xhs_id ? `再次搜索小红书号 ${selected.state.xhs_id}` : '再次按店名搜索'}</a></div></div>
+                <div className={`status-card ${minutesSending !== null && minutesSending >= 2 ? 'warn' : 'info'}`}><Send size={18} /><div><strong>{minutesSending !== null && minutesSending >= 2 ? `已经过去 ${minutesSending} 分钟，发送成功了吗？` : '发送成功了吗？'}</strong><p>{selected.state.profile_url ? '在对方主页点“关注”右边的对话气泡，把文案粘贴发出去' : '请在小红书里把文案发出去'}，然后回来点下面的按钮。</p>{copyFailed[selected.id] && <p className="copy-failed">这次没能自动复制文案，请先点下面的“复制文案”。</p>}<a className="link-button" href={shopUrl(selected)} target="_blank" rel="noreferrer">{selected.state.profile_url ? '再次打开对方主页' : selected.state.xhs_id ? `再次搜索小红书号 ${selected.state.xhs_id}` : '再次按店名搜索'}</a></div></div>
                 {finalText}
                 <label>备注（可选）<input value={resultNote} onChange={(event) => setResultNote(event.target.value)} placeholder="例如：提示对方未关注，只能发一条" /></label>
                 <div className="button-row spread">
@@ -581,7 +617,7 @@ function App() {
                 {selected.stage === 'read_no_reply' && <div className="status-card neutral"><ShieldCheck size={18} /><div><strong>未回复，已加入勿扰名单</strong><p>{selected.state.result_note} 如果对方之后又回复了，仍然可以在下面记录，这家店会移出勿扰名单。</p></div></div>}
                 {finalText}
                 <ReplyPanel run={selected} busy={busy} onSave={(action) => { void runAction(action).then((next) => { if (next) setFilter(needsFollowUp(next) ? 'todo' : next.stage === 'sent' ? 'waiting' : 'done') }) }} onError={setError} />
-                {selected.stage === 'sent' && <button className="link-button danger" type="button" disabled={busy} onClick={() => { if (window.confirm('确定记录为“发送后出现异常”吗？\n这会让账号进入降级状态，当天的名额会减少。只是对方自动回复、或点错了，请点取消。')) recordResult('failed', '人工反馈：发送后出现异常') }}>发送后出现异常（例如被平台限制），点这里记录</button>}
+                {selected.stage === 'sent' && <button className="link-button danger" type="button" disabled={busy} onClick={() => { if (window.confirm('确定记录为“发送后出现异常”吗？\n这会让账号进入降级状态，提醒的基线会降到私信 2 条、评论 1 条。只是对方自动回复、或点错了，请点取消。')) recordResult('failed', '人工反馈：发送后出现异常') }}>发送后出现异常（例如被平台限制），点这里记录</button>}
               </div>}
 
               {(selected.stage === 'failed' || selected.stage === 'blocked') && <div className="decision-content"><div className="status-card neutral"><AlertTriangle size={18} /><div><strong>{selected.stage === 'failed' ? '已记录发送异常' : '任务已结束，不会联系这家店铺'}</strong><p>{selected.state.result_note || '被策略检查拦截，详情见“风险记录”。'}</p></div></div>{finalText}</div>}
@@ -600,6 +636,7 @@ function App() {
         </div>}
 
         {view === 'progress' && <ProgressView onNavigate={setView} />}
+        {view === 'revisit' && <RevisitView onError={setError} onLoaded={(data) => setRevisitDue(data.due.length)} onOpen={(runId) => { setFilter('all'); setSelectedId(runId); setView('workflow') }} />}
         {view === 'worklog' && <WorkLogView onError={setError} onOpen={(runId) => { setFilter('all'); setSelectedId(runId); setView('workflow') }} />}
 
         {view === 'risk' && <section className="panel page-panel">

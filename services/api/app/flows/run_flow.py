@@ -94,6 +94,11 @@ def save_result(
     before_state: dict[str, Any] | None = None,
     idempotency_key: str | None = None,
 ) -> dict[str, Any]:
+    # The profile link can be added after the run started; the workflow's own state never saw it.
+    if not state.get("profile_url"):
+        kept = ((store.get(run_id) or {}).get("state") or {}).get("profile_url")
+        if kept:
+            state = {**state, "profile_url": kept}
     payload = public_run(run_id, state)
     store.save(
         run_id,

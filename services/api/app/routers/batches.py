@@ -28,6 +28,8 @@ from ..runtime import (  # noqa: E402
     MAX_IMAGE_BYTES,
 )
 from packages.agent_core.screening import (  # noqa: E402
+    PROFILE_URL_HINT,
+    normalize_profile_url,
     MAX_IMAGES_PER_SHOP,
     MAX_SHOPS_PER_BATCH,
     ShopType as ScreeningShopType,
@@ -113,8 +115,9 @@ def run_new_batch(batch_id: str, shops: list[dict[str, Any]]) -> dict[str, Any]:
     initial = {
         "batch_id": batch_id,
         "shops": shops,
-        "dm_slots": max(summary["dm"]["limit"] - summary["dm"]["used"], 0),
-        "comment_slots": max(summary["comment"]["limit"] - summary["comment"]["used"], 0),
+        # Suggestions run up to the ceiling; past the baseline the reviewer is asked at approval.
+        "dm_slots": max(summary["dm"]["ceiling"] - summary["dm"]["used"], 0),
+        "comment_slots": max(summary["comment"]["ceiling"] - summary["comment"]["used"], 0),
         "results": [],
         "status": "processing",
     }
@@ -274,6 +277,8 @@ def get_batch_image(batch_id: str, file_name: str) -> FileResponse:
 class ShopCorrection(BaseModel):
     shop_type: ScreeningShopType | None = None
     xhs_id: str | None = Field(default=None, max_length=100)
+    # Not something the model read: the human pastes it so sending can open the profile directly.
+    profile_url: str | None = Field(default=None, max_length=2000)
 
 
 @router.post("/api/batches/{batch_id}/shops/{shop_key}/correct")
@@ -287,6 +292,11 @@ def correct_batch_shop(batch_id: str, shop_key: str, payload: ShopCorrection) ->
     target = next((r for r in current["results"] if r["shop_key"] == shop_key and r["status"] == "read"), None)
     if target is None:
         raise HTTPException(status_code=404, detail="找不到这家店的识别结果")
+    if payload.profile_url is not None:
+        url = normalize_profile_url(payload.profile_url)
+        if payload.profile_url.strip() and not url:
+            raise HTTPException(status_code=422, detail=PROFILE_URL_HINT)
+        target["profile_url"] = url
     changes = {"shop_type": payload.shop_type, "xhs_id": payload.xhs_id}
     for field, value in changes.items():
         if value is None:

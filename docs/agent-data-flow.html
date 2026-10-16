@@ -1,0 +1,649 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="用当前小红书运营 Agent 项目理解输入、检索、规则、LLM、校验、人工决策和结果反馈的数据流。"
+    />
+    <title>Agent 数据流｜从截图到反馈</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #172b36;
+        --muted: #60717a;
+        --paper: #f5f7f4;
+        --card: #ffffff;
+        --line: #dce5e2;
+        --teal: #087e78;
+        --teal-soft: #e2f4ef;
+        --blue: #3568a8;
+        --blue-soft: #eaf1fb;
+        --amber: #946317;
+        --amber-soft: #fff3d8;
+        --coral: #b64d3f;
+        --coral-soft: #fff0eb;
+        --shadow: 0 12px 32px rgba(23, 43, 54, 0.07);
+      }
+
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; scroll-padding-top: 24px; }
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      }
+      a { color: var(--teal); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+      a:hover { color: #045b57; }
+      code {
+        padding: 0.12em 0.38em;
+        border-radius: 5px;
+        background: #edf2f1;
+        color: #25414a;
+        font: 0.9em ui-monospace, SFMono-Regular, Menlo, monospace;
+        overflow-wrap: anywhere;
+      }
+      .shell { display: grid; grid-template-columns: 248px minmax(0, 1fr); min-height: 100vh; }
+      .sidebar {
+        position: sticky;
+        top: 0;
+        align-self: start;
+        height: 100vh;
+        overflow-y: auto;
+        padding: 30px 20px 24px 26px;
+        border-right: 1px solid var(--line);
+        background: #fbfcfa;
+      }
+      .brand {
+        margin-bottom: 28px;
+        color: var(--teal);
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+      .sidebar h2 { margin: 0 0 12px; font-size: 14px; }
+      .toc { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+      .toc a {
+        display: block;
+        padding: 8px 10px;
+        border-radius: 8px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.4;
+        text-decoration: none;
+      }
+      .toc a:hover, .toc a[aria-current="location"] { background: var(--teal-soft); color: var(--teal); }
+      .sidebar-note {
+        margin-top: 24px;
+        padding: 13px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      main { width: min(1120px, 100%); padding: 36px clamp(22px, 5vw, 70px) 80px; }
+      .eyebrow { color: var(--teal); font-size: 12px; font-weight: 800; letter-spacing: 0.1em; }
+      h1 { margin: 8px 0 12px; font-size: clamp(32px, 5vw, 52px); letter-spacing: -0.045em; line-height: 1.1; }
+      h2 { margin: 0 0 18px; font-size: clamp(23px, 3vw, 31px); letter-spacing: -0.025em; line-height: 1.25; }
+      h3 { margin: 0 0 7px; font-size: 17px; line-height: 1.35; }
+      p { margin: 0 0 12px; }
+      .lede { max-width: 780px; color: var(--muted); font-size: 18px; }
+      .hero { padding: 22px 0 35px; }
+      .hero-callout {
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+        max-width: 850px;
+        margin-top: 22px;
+        padding: 15px 18px;
+        border-left: 4px solid var(--teal);
+        border-radius: 0 10px 10px 0;
+        background: var(--teal-soft);
+      }
+      .hero-callout strong { white-space: nowrap; }
+      section { margin: 0 0 56px; }
+      .section-kicker { margin-bottom: 8px; color: var(--muted); font-size: 12px; font-weight: 800; letter-spacing: 0.09em; }
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--card);
+        box-shadow: var(--shadow);
+      }
+      .flow-card { padding: 22px; }
+      .flow-legend { display: flex; flex-wrap: wrap; gap: 9px 18px; margin-bottom: 20px; color: var(--muted); font-size: 12px; }
+      .legend-item { display: inline-flex; gap: 7px; align-items: center; }
+      .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--teal); }
+      .dot.model { background: var(--blue); }
+      .dot.human { background: var(--coral); }
+      .dot.future { background: var(--amber); }
+      .flow {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+      }
+      .flow-node {
+        position: relative;
+        min-height: 132px;
+        padding: 15px;
+        border: 1px solid var(--line);
+        border-top: 4px solid var(--teal);
+        border-radius: 11px;
+        background: #fff;
+      }
+      .flow-node.model { border-top-color: var(--blue); }
+      .flow-node.human { border-top-color: var(--coral); }
+      .flow-node.future { border: 1px dashed #d8a546; border-top: 4px dashed #d8a546; background: #fffaf0; }
+      .flow-node .step { color: var(--muted); font: 700 11px ui-monospace, monospace; }
+      .flow-node p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .flow-node .tag { display: inline-block; margin-top: 9px; padding: 2px 7px; border-radius: 20px; background: #edf2f1; color: var(--muted); font-size: 10px; font-weight: 700; }
+      .flow-node.future .tag { background: var(--amber-soft); color: var(--amber); }
+      .flow-arrow { display: none; }
+      .flow-caption { margin: 16px 2px 0; color: var(--muted); font-size: 12px; }
+      .note-bar {
+        margin-top: 14px;
+        padding: 12px 14px;
+        border-radius: 9px;
+        background: var(--amber-soft);
+        color: #684a18;
+        font-size: 13px;
+      }
+      .boundary-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }
+      .boundary { padding: 17px; }
+      .boundary-head { display: flex; gap: 10px; align-items: center; margin-bottom: 11px; }
+      .boundary-number {
+        display: grid;
+        width: 30px;
+        height: 30px;
+        flex: 0 0 30px;
+        place-items: center;
+        border-radius: 9px;
+        background: var(--teal-soft);
+        color: var(--teal);
+        font-size: 12px;
+        font-weight: 800;
+      }
+      .boundary p, .boundary li { color: var(--muted); font-size: 13px; }
+      .boundary ul { margin: 8px 0 0; padding-left: 19px; }
+      .boundary .example { margin-top: 10px; padding: 9px 11px; border-radius: 8px; background: #f4f7f6; color: #344b55; font-size: 12px; }
+      .label { color: var(--ink); font-weight: 750; }
+      .token-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+      .token-card { padding: 16px; }
+      .token-card p { color: var(--muted); font-size: 13px; }
+      .token-card .mini { color: var(--teal); font: 700 11px ui-monospace, monospace; }
+      .token-chain {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 7px;
+        margin: 16px 0;
+        padding: 14px;
+        border-radius: 10px;
+        background: #172b36;
+        color: white;
+        font-size: 12px;
+      }
+      .token-chain span { padding: 4px 7px; border-radius: 5px; background: #29434f; }
+      .token-chain b { color: #8dd8cb; font-size: 14px; }
+      .two-col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+      .rag-card { padding: 19px; }
+      .rag-card h3 { display: flex; gap: 8px; align-items: center; }
+      .badge { padding: 2px 8px; border-radius: 20px; background: var(--amber-soft); color: var(--amber); font-size: 10px; font-weight: 800; letter-spacing: 0.03em; }
+      .rag-card p, .rag-card li { color: var(--muted); font-size: 13px; }
+      .rag-card ol, .rag-card ul { margin: 10px 0 0; padding-left: 21px; }
+      .code-panel { margin-top: 13px; padding: 13px; border-radius: 9px; background: #f2f6f5; color: #34505a; font: 12px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+      .example-path { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap: 8px; align-items: stretch; margin: 18px 0; }
+      .path-box { padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+      .path-box small { display: block; margin-bottom: 5px; color: var(--muted); font-size: 11px; }
+      .path-box strong { font-size: 13px; }
+      .path-arrow { align-self: center; color: var(--teal); font-size: 20px; }
+      .fDE-card { padding: 20px; }
+      .role-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+      .role-item { padding: 12px; border-radius: 9px; background: #f4f7f6; }
+      .role-item strong { display: block; margin-bottom: 3px; font-size: 13px; }
+      .role-item span { color: var(--muted); font-size: 12px; }
+      .checklist { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin-top: 14px; }
+      .check { padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); font-size: 12px; }
+      .check b { color: var(--teal); }
+      .design-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+      .design-card { position: relative; padding: 17px; }
+      .design-card .design-step { color: var(--teal); font: 800 11px ui-monospace, monospace; letter-spacing: 0.04em; }
+      .design-card p, .design-card li { color: var(--muted); font-size: 13px; }
+      .design-card ul { margin: 8px 0 0; padding-left: 18px; }
+      .design-card .question { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); color: var(--ink); font-size: 12px; font-weight: 700; }
+      .design-band { margin-top: 14px; padding: 16px; border-radius: 11px; background: #172b36; color: #f5faf8; }
+      .design-band strong { color: #8dd8cb; }
+      .design-band p { margin: 5px 0 0; color: #d5e1de; font-size: 13px; }
+      .acceptance-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-top: 14px; }
+      .acceptance-item { padding: 11px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
+      .acceptance-item strong { display: block; margin-bottom: 4px; font-size: 12px; }
+      .acceptance-item span { color: var(--muted); font-size: 11px; line-height: 1.45; }
+      .metric-row { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+      .metric { padding: 10px; border-radius: 8px; background: #f3f6f5; }
+      .metric b { display: block; font-size: 11px; }
+      .metric span { color: var(--muted); font-size: 10px; }
+      .source-list { margin: 14px 0 0; padding-left: 20px; }
+      .source-list li { margin: 6px 0; color: var(--muted); font-size: 12px; }
+      .refs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+      .refs a { padding: 5px 9px; border: 1px solid var(--line); border-radius: 7px; background: #fff; font-size: 11px; }
+      footer { padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+      @media (max-width: 900px) {
+        .shell { grid-template-columns: 1fr; }
+        .sidebar { position: relative; height: auto; padding: 16px 20px; border-right: 0; border-bottom: 1px solid var(--line); }
+        .brand { margin-bottom: 8px; }
+        .sidebar h2 { margin-bottom: 6px; }
+        .toc { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+        .toc a { padding: 7px; font-size: 11px; }
+        .sidebar-note { display: none; }
+        main { margin: 0 auto; }
+      }
+      @media (max-width: 650px) {
+        main { padding: 25px 17px 55px; }
+        .toc { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .flow { grid-template-columns: 1fr; gap: 9px; }
+        .flow-node { min-height: auto; padding: 13px; }
+        .flow-node:not(:last-child)::after { content: "↓"; position: absolute; z-index: 2; right: 14px; bottom: -17px; color: var(--teal); font-weight: 900; }
+        .boundary-grid, .token-grid, .two-col, .role-grid, .checklist, .design-grid { grid-template-columns: 1fr; }
+        .acceptance-grid, .metric-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .example-path { grid-template-columns: 1fr; }
+        .path-arrow { justify-self: center; transform: rotate(90deg); }
+        .hero-callout { display: block; }
+        .hero-callout strong { display: block; margin-bottom: 4px; }
+      }
+      @media print {
+        .shell { display: block; }
+        .sidebar { display: none; }
+        main { width: 100%; padding: 0; }
+        body { background: white; }
+        .card { box-shadow: none; break-inside: avoid; }
+        section { break-inside: avoid; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar" aria-label="页面目录">
+        <div class="brand">Agent field guide</div>
+        <h2>页面目录</h2>
+        <nav>
+          <ol class="toc">
+            <li><a href="#design">01 · Agent 顶层设计</a></li>
+            <li><a href="#flow">02 · 一张图看全链路</a></li>
+            <li><a href="#boundaries">03 · 七个关键边界</a></li>
+            <li><a href="#tokens">04 · Token 如何计算</a></li>
+            <li><a href="#rag">05 · 假设加入 RAG</a></li>
+            <li><a href="#example">06 · 跟一条店铺数据</a></li>
+            <li><a href="#fde">07 · 产品型 FDE</a></li>
+          </ol>
+        </nav>
+        <div class="sidebar-note">
+          先看流程，再沿着同一家店走一遍。绿色是当前程序，蓝色是模型，红色是人工，虚线是尚未实现的 RAG。
+        </div>
+      </aside>
+
+      <main>
+        <header class="hero">
+          <div class="eyebrow">用你的项目理解 Agent 应用</div>
+          <h1>从一张截图<br />到一条可复盘的业务结果</h1>
+          <p class="lede">不是“把资料扔给 AI”。而是明确每一步谁提供数据、谁做判断、谁能否决，以及结果怎样回到系统。</p>
+          <div class="hero-callout">
+            <strong>核心地图</strong>
+            <span>输入 → 检索（当前无 RAG）→ 程序规则 → LLM → 程序验证 → 人工修改与动作 → 结果反馈</span>
+          </div>
+        </header>
+
+        <section id="design">
+          <div class="section-kicker">01 / TOP-LEVEL DESIGN</div>
+          <h2>Agent 顶层设计：从业务结果倒推系统</h2>
+          <p class="lede">阶段验收、规则边界、输出都重要，但不是三个并列起点。先定义要改变的业务结果，再设计每个阶段如何产生可信、可验收的输出。</p>
+          <div class="design-grid">
+            <article class="card design-card">
+              <div class="design-step">01 · WHY</div>
+              <h3>定义业务结果与约束</h3>
+              <p>明确谁的什么工作要变好、当前基线是什么、哪些代价不能接受。</p>
+              <p class="question">本项目：让人工更有效地筛店、写首次沟通；但不自动抓取或发送。</p>
+            </article>
+            <article class="card design-card">
+              <div class="design-step">02 · FLOW</div>
+              <h3>画用户工作流与状态</h3>
+              <p>把业务拆成真实阶段，标清进入条件、分支、等待人工、失败和恢复。</p>
+              <p class="question">例如：上传 → 读图 → 批审 → 起草 → 审文案 → 人工发送 → 记录结果。</p>
+            </article>
+            <article class="card design-card">
+              <div class="design-step">03 · CONTRACT</div>
+              <h3>定义阶段输入与输出</h3>
+              <p>每一步规定输入字段、输出结构、证据来源、版本和下游消费者。</p>
+              <p class="question">例如：读图输出 <code>ShopExtraction</code>；起草输出结构化路线和文案。</p>
+            </article>
+            <article class="card design-card">
+              <div class="design-step">04 · AUTHORITY</div>
+              <h3>划分决策权与硬边界</h3>
+              <p>明确模型能建议什么、代码必须强制什么、人工必须批准什么，以及模型永远不能做什么。</p>
+              <p class="question">本项目：模型建议路线；代码管勿扰 / 配额 / 文案门禁；人决定路线和发送。</p>
+            </article>
+            <article class="card design-card">
+              <div class="design-step">05 · EVIDENCE</div>
+              <h3>定义验收证据与发布门槛</h3>
+              <p>为每阶段选择可重复检查的质量指标、风险不变量、失败处理和上线条件。</p>
+              <p class="question">先用固定案例和人工复核建立基线，不凭感觉设一个“准确率”。</p>
+            </article>
+            <article class="card design-card">
+              <div class="design-step">06 · OPERATE</div>
+              <h3>设计运行、监控与学习</h3>
+              <p>记录每次调用、决策、修改、成本、延迟、错误和最终业务结果；提供回滚路径。</p>
+              <p class="question">反馈是用于分析和批准新版本，不代表系统自动学会或自动改规则。</p>
+            </article>
+          </div>
+          <div class="design-band">
+            <strong>因此，你提到的三件事，正确关系是：</strong>
+            <p><b>规则 / 边界</b>定义系统允许的决策空间；<b>阶段输出</b>是节点之间的接口与可追踪工件；<b>验收成果</b>证明每个节点和整条流程达到目标。最终它们都服务于业务结果与风险约束。</p>
+          </div>
+          <h3 style="margin-top:20px">每个阶段的“完成”至少要回答五项</h3>
+          <div class="acceptance-grid">
+            <div class="acceptance-item"><strong>输入契约</strong><span>需要哪些事实？缺失时是未知、失败还是人工补齐？</span></div>
+            <div class="acceptance-item"><strong>输出契约</strong><span>交付什么结构和证据？由哪个后续步骤消费？</span></div>
+            <div class="acceptance-item"><strong>质量门槛</strong><span>用哪些案例、指标或人工检查判定合格？</span></div>
+            <div class="acceptance-item"><strong>边界不变量</strong><span>哪些事情无论模型怎么说都不能发生？</span></div>
+            <div class="acceptance-item"><strong>失败与追踪</strong><span>如何停止 / 重试 / 升级人工？保存哪些 trace？</span></div>
+          </div>
+          <div class="metric-row" aria-label="不同层次的验收指标">
+            <div class="metric"><b>业务结果</b><span>回复、意向、成交</span></div>
+            <div class="metric"><b>AI 质量</b><span>事实依据、路线、草稿</span></div>
+            <div class="metric"><b>安全约束</b><span>勿扰、导流、人工停点</span></div>
+            <div class="metric"><b>运营效率</b><span>耗时、修改率、采用率</span></div>
+            <div class="metric"><b>系统可靠性</b><span>失败率、延迟、成本</span></div>
+          </div>
+          <div class="note-bar"><strong>严谨的验收原则：</strong>不同层的指标不能互相代替。路线准确不代表草稿合规；草稿被用户接受不代表客户会回复；回复率也不能单独证明模型变好（名单和话术可能同时变化）。先固定输入和评估集，再比较版本。</div>
+          <h3 style="margin-top:20px">套到当前项目：每阶段交付什么证据才算完成？</h3>
+          <div style="overflow-x:auto">
+            <table style="width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden;font-size:12px">
+              <thead><tr style="background:#edf4f2;text-align:left"><th style="padding:10px">阶段</th><th style="padding:10px">阶段输出</th><th style="padding:10px">验收重点 / 不通过时</th></tr></thead>
+              <tbody>
+                <tr><td style="padding:10px;border-top:1px solid var(--line)"><b>截图读取</b></td><td style="padding:10px;border-top:1px solid var(--line)">结构化店铺字段 + 不清楚字段</td><td style="padding:10px;border-top:1px solid var(--line)">字段能回指截图；看不清就标未知 / 人工核对，不把未知当成无关。</td></tr>
+                <tr><td style="padding:10px;border-top:1px solid var(--line)"><b>规则分档</b></td><td style="padding:10px;border-top:1px solid var(--line)">信号、档位、理由、规则版本</td><td style="padding:10px;border-top:1px solid var(--line)">相同输入和规则版本应得到相同结果；勿扰名单必须阻止进入触达候选。</td></tr>
+                <tr><td style="padding:10px;border-top:1px solid var(--line)"><b>路线与起草</b></td><td style="padding:10px;border-top:1px solid var(--line)">Schema 输出、证据引用、候选文案</td><td style="padding:10px;border-top:1px solid var(--line)">格式和引用有效；文案经过业务案例评测与程序政策检查；失败则展示原因并交人工，不伪装成功。</td></tr>
+                <tr><td style="padding:10px;border-top:1px solid var(--line)"><b>人工审核 / 发送</b></td><td style="padding:10px;border-top:1px solid var(--line)">最终路线、最终文本、修改原因、手动发送结果</td><td style="padding:10px;border-top:1px solid var(--line)">人工保有批准权；系统不能替人执行平台外部动作。</td></tr>
+                <tr><td style="padding:10px;border-top:1px solid var(--line)"><b>结果反馈</b></td><td style="padding:10px;border-top:1px solid var(--line)">回复与意向阶段 + 联系时快照</td><td style="padding:10px;border-top:1px solid var(--line)">结果能关联当时输入、文案和版本；用来评估，不让少量样本自动改规则。</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="note-bar"><strong>不要先拍脑袋定所有数值门槛。</strong>先说明风险和业务目标，再用人工标注与固定样本建立基线；能用程序验证的硬约束单独设门槛，效果指标则在代表性数据上校准。</div>
+        </section>
+
+        <section id="flow">
+          <div class="section-kicker">02 / END-TO-END</div>
+          <h2>一张图看全链路</h2>
+          <div class="card flow-card">
+            <div class="flow-legend" aria-label="流程图图例">
+              <span class="legend-item"><i class="dot"></i>程序 / 数据</span>
+              <span class="legend-item"><i class="dot model"></i>外部模型</span>
+              <span class="legend-item"><i class="dot human"></i>人工决定</span>
+              <span class="legend-item"><i class="dot future"></i>假设：未来 RAG</span>
+            </div>
+            <div class="flow">
+              <article class="flow-node human">
+                <span class="step">01 · INPUT</span>
+                <h3>截图 + 人工信息</h3>
+                <p>手动从小红书截取主页 / 笔记；补充联系场景。</p>
+                <span class="tag">原图本地暂存 10 天</span>
+              </article>
+              <article class="flow-node model">
+                <span class="step">02 · VISION LLM</span>
+                <h3>视觉模型读图</h3>
+                <p>把可见文字、店铺类型等整理为结构化字段。</p>
+                <span class="tag">ShopExtraction JSON</span>
+              </article>
+              <article class="flow-node">
+                <span class="step">03 · CODE</span>
+                <h3>规则分档与排序</h3>
+                <p>程序计算活跃、面料、价格、门店信号及建议路线。</p>
+                <span class="tag">screening-rules-v0</span>
+              </article>
+              <article class="flow-node human">
+                <span class="step">04 · HUMAN</span>
+                <h3>批次审核</h3>
+                <p>你核对误读、修正信息，并选择店铺和路线。</p>
+                <span class="tag">人工拥有最终路线权</span>
+              </article>
+              <article class="flow-node future">
+                <span class="step">05 · OPTIONAL RAG</span>
+                <h3>检索相关知识</h3>
+                <p>假设未来检索已批准的产品资料与案例，再取回文字。</p>
+                <span class="tag">当前项目没有 RAG / 向量库</span>
+              </article>
+              <article class="flow-node model">
+                <span class="step">06 · TEXT LLM</span>
+                <h3>路线建议 + 草稿</h3>
+                <p>按 Prompt 和 JSON Schema 返回路线、证据点、不确定项和草稿。</p>
+                <span class="tag">Qwen 或 Mock Provider</span>
+              </article>
+              <article class="flow-node">
+                <span class="step">07 · CODE</span>
+                <h3>结构 / 引用 / 风险检查</h3>
+                <p>Schema、证据 ID、勿扰和文案 Policy Gate。</p>
+                <span class="tag">不合格则阻止继续</span>
+              </article>
+              <article class="flow-node human">
+                <span class="step">08 · HUMAN → FEEDBACK</span>
+                <h3>审核、手动发送、记结果</h3>
+                <p>人工改文案并在官方页面发送；回复和结果留作后续评估。</p>
+                <span class="tag">系统不自动发送</span>
+              </article>
+            </div>
+            <p class="flow-caption">模型不是唯一决策者：视觉模型负责读取，规则代码负责确定性计算，文本模型提出建议，人工负责外部动作。</p>
+          </div>
+        </section>
+
+        <section id="boundaries">
+          <div class="section-kicker">03 / DATA BOUNDARIES</div>
+          <h2>七个边界：每一步交接什么？</h2>
+          <div class="boundary-grid">
+            <article class="card boundary">
+              <div class="boundary-head"><span class="boundary-number">1</span><h3>输入了什么</h3></div>
+              <p><span class="label">含义：</span>明确本次任务允许系统使用的原始资料。</p>
+              <p><span class="label">项目例子：</span>主页截图、笔记截图、人工补充的店铺情况和联系背景。</p>
+              <div class="example">边界问题：给模型的是主页标题，还是整篇笔记？当前起草输入主要是识别后的字段和近期笔记标题，不等于完整笔记内容。</div>
+            </article>
+            <article class="card boundary">
+              <div class="boundary-head"><span class="boundary-number">2</span><h3>哪些信息被检索</h3></div>
+              <p><span class="label">含义：</span>从更大的知识库挑出当前任务相关的资料。</p>
+              <p><span class="label">当前项目：</span>没有 RAG、embedding 或向量数据库；产品事实由配置文件直接提供。</p>
+              <div class="example">将来可检索：已确认的产品卖点、经批准的话术经验、适用的规则版本。不能把未验证猜测包装成知识。</div>
+            </article>
+            <article class="card boundary">
+              <div class="boundary-head"><span class="boundary-number">3</span><h3>规则计算了什么</h3></div>
+              <p><span class="label">含义：</span>对确定性条件用普通代码做明确判断，而不是让模型猜。</p>
+              <p><span class="label">项目例子：</span>程序用日期、价格和识别字段算信号、分档和排序；勿扰门禁先于文本模型。</p>
+              <div class="example">注意：高 / 中 / 低目前是规则排序，不是经数据校准的回复率或成交概率。</div>
+            </article>
+            <article class="card boundary">
+              <div class="boundary-head"><span class="boundary-number">4</span><h3>模型返回了什么</h3></div>
+              <p><span class="label">含义：</span>模型给候选判断与内容，不直接改数据库状态或发送消息。</p>
+              <p><span class="label">项目例子：</span><code>route</code>、理由、业务摘要、证据引用、个性化点、草稿、不确定项。</p>
+              <div class="example">模型给出的理由是可读说明，不是可审计的完整内部推理，也不是正确性的证明。</div>
+            </article>
+            <article class="card boundary">
+              <div class="boundary-head"><span class="boundary-number">5</span><h3>程序验证了什么</h3></div>
+              <p><span class="label">含义：</span>把模型输出当成不可信输入，检查它是否符合可接受条件。</p>
+              <p><span class="label">项目例子：</span>JSON / Pydantic Schema、证据 ID 是否存在、勿扰门禁、评论与导流词检查。</p>
+              <div class="example">Schema 合法 ≠ 内容真实；引用 ID 存在 ≠ 文案每句话都被证据证明。人工仍需核对。</div>
+            </article>
+            <article class="card boundary">
+              <div class="boundary-head"><span class="boundary-number">6</span><h3>人工改了什么</h3></div>
+              <p><span class="label">含义：</span>记录模型草稿与人工最终版本之间的差异及修改原因。</p>
+              <p><span class="label">项目例子：</span>人工可改路线、编辑草稿、批准或驳回；已有修改原因记录的实现。</p>
+              <div class="example">这些改动是偏好/监督信号，不会即时训练模型，也不应自动改规则或 Prompt。</div>
+            </article>
+            <article class="card boundary">
+              <div class="boundary-head"><span class="boundary-number">7</span><h3>结果如何反馈</h3></div>
+              <p><span class="label">含义：</span>把真实回复、意向、成交或未成交关联回联系时的输入和版本。</p>
+              <p><span class="label">项目例子：</span>回复状态、对方需求标签、进展阶段、联系快照和最终发送文案。</p>
+              <div class="example">反馈先用于分组统计与评估；样本不足时叫观察，不叫规律。策略变更需人工批准、对照评测和版本记录。</div>
+            </article>
+            <article class="card boundary">
+              <div class="boundary-head"><span class="boundary-number">↔</span><h3>为什么叫“边界”</h3></div>
+              <p>每次交接都要讲清：数据从哪来、谁能修改、谁做决定、失败时停在哪里。</p>
+              <div class="example">FDE 的价值之一，就是把模糊需求转成这些能实现、能测试、能追责的接口。</div>
+            </article>
+          </div>
+        </section>
+
+        <section id="tokens">
+          <div class="section-kicker">04 / TOKEN MECHANICS</div>
+          <h2>Token 到底怎样变成回答？</h2>
+          <p class="lede">以下是通用 LLM 的概念图。Qwen 的确切 tokenizer、内部层数和多模态编码方式由供应商实现，应用代码无法观察全部细节。</p>
+          <div class="token-chain" aria-label="Token 生成流程">
+            <span>Prompt + JSON 输入</span><b>→</b><span>Tokenizer：文字 → token ID</span><b>→</b><span>模型计算</span><b>→</b><span>逐 token 生成</span><b>→</b><span>解码文字 / JSON</span><b>→</b><span>本地校验</span>
+          </div>
+          <div class="token-grid">
+            <article class="card token-card">
+              <div class="mini">A · ENCODE</div><h3>文字切成 token</h3>
+              <p>Token 是模型词表里的离散单元，不等于一个汉字或一个词。JSON 键名、标点、数字也占上下文。具体数量由 Qwen tokenizer 决定。</p>
+            </article>
+            <article class="card token-card">
+              <div class="mini">B · REPRESENT</div><h3>ID 查成模型向量</h3>
+              <p>每个 token ID 被映射成模型内部向量，再加入位置等信息。这是 LLM 自己处理输入的表示，不是 RAG 检索向量。</p>
+            </article>
+            <article class="card token-card">
+              <div class="mini">C · TRANSFORM</div><h3>结合上下文更新表示</h3>
+              <p>Transformer 多层计算，让当前 token 的表示融合上下文关系。可以理解为模型在处理“哪些输入信息与当前输出位置相关”。</p>
+            </article>
+            <article class="card token-card">
+              <div class="mini">D · SCORE</div><h3>算下一个 token 的分布</h3>
+              <p>模型对词表候选计算 logits，再形成概率分布；解码策略按配置选择下一个 token。温度较低会降低随机性，不保证确定正确。</p>
+            </article>
+            <article class="card token-card">
+              <div class="mini">E · GENERATE</div><h3>循环生成直到结束</h3>
+              <p>新 token 加回上下文，模型继续预测下一个 token，直到结束标记或长度限制。服务端再把 token 序列解码成 JSON 文本。</p>
+            </article>
+            <article class="card token-card">
+              <div class="mini">F · VALIDATE</div><h3>应用解析并决定接不接受</h3>
+              <p>本项目把返回内容交给 Pydantic 校验 Schema，再查证据引用；不通过就报错，不让不合格结果冒充成功。</p>
+            </article>
+          </div>
+          <div class="note-bar"><strong>两种 embedding 不要混淆：</strong>LLM 内部 token embedding 用于模型计算；RAG 的文本 embedding 用于相似度搜索。RAG 检索通常把找回的文字送给 LLM，不是把检索向量当 Prompt 传过去。</div>
+        </section>
+
+        <section id="rag">
+          <div class="section-kicker">05 / RAG, HYPOTHETICAL</div>
+          <h2>假设加入 RAG：向量先找资料，文字再进模型</h2>
+          <div class="two-col">
+            <article class="card rag-card">
+              <h3>离线：建立知识索引 <span class="badge">假设设计</span></h3>
+              <ol>
+                <li>整理产品事实、已批准案例、有效规则；脱敏并标注来源、日期、版本和状态。</li>
+                <li>按主题切成适中片段（chunk），不要把无关章节混在一起。</li>
+                <li>Embedding 模型把每个片段编码成向量。</li>
+                <li>保存“向量 + 原文 + 元数据”到向量索引。</li>
+              </ol>
+              <div class="code-panel">知识片段 → embedding 模型 → [0.08, -0.21, …] + 原文 + 来源 / 版本</div>
+            </article>
+            <article class="card rag-card">
+              <h3>在线：检索后组装上下文 <span class="badge">假设设计</span></h3>
+              <ol>
+                <li>根据店铺事实和当前任务形成查询。</li>
+                <li>用同一套 embedding 模型编码查询。</li>
+                <li>向量相似度搜索，按状态 / 场景等元数据过滤；可选 reranker 重排。</li>
+                <li>取回少量文字片段和来源，拼进 Prompt 后发给 LLM。</li>
+              </ol>
+              <div class="code-panel">query → query vector → top-k 文档 → 过滤 / 重排 → 文本上下文 → LLM</div>
+            </article>
+          </div>
+          <div class="note-bar"><strong>关键纠正：</strong>Embedding 是“找相似资料”的索引表示，不是自动知识，也不会更新模型权重。检索错、资料过时或把假设标成事实，仍会让回答变差；所以 RAG 也需要来源、版本、权限和人工审核。</div>
+        </section>
+
+        <section id="example">
+          <div class="section-kicker">06 / TRACE ONE SHOP</div>
+          <h2>跟一条店铺数据走一遍</h2>
+          <p>假设截图里可见“西装定制”“全麻衬”“近期笔记标题”，程序读出这些内容。下面分清每一层的责任：</p>
+          <div class="example-path">
+            <div class="path-box"><small>观察到的事实</small><strong>主页简介 + 全麻衬 + 笔记日期</strong></div>
+            <span class="path-arrow">→</span>
+            <div class="path-box"><small>程序计算</small><strong>面料信号 = yes；活跃信号按日期计算</strong></div>
+            <span class="path-arrow">→</span>
+            <div class="path-box"><small>模型候选</small><strong>建议路线、引用证据、生成草稿</strong></div>
+          </div>
+          <div class="example-path">
+            <div class="path-box"><small>程序验收</small><strong>结构正确？evidence_id 存在？文案触发拦截？</strong></div>
+            <span class="path-arrow">→</span>
+            <div class="path-box"><small>人工判断</small><strong>这句是否准确、像不像你、是否采用路线？</strong></div>
+            <span class="path-arrow">→</span>
+            <div class="path-box"><small>业务结果</small><strong>手动发送后记回复 / 意向 / 未回复</strong></div>
+          </div>
+          <div class="card boundary">
+            <h3>这个例子里，哪些不能混为一谈？</h3>
+            <ul>
+              <li>“全麻衬”是截图证据；“这家店可能重视面料”是解释；两者不是同一层事实。</li>
+              <li>“建议 DM”是模型建议；“允许进入队列”要通过程序规则和人工审核。</li>
+              <li>“文案被人工接受”是偏好信号；“对方回复”才是业务结果信号。</li>
+              <li>“回复了”不必然代表成交；结果要继续记录意向阶段，避免把指标混成一个成功率。</li>
+            </ul>
+          </div>
+        </section>
+
+        <section id="fde">
+          <div class="section-kicker">07 / YOUR FDE PATH</div>
+          <h2>你偏产品，是做 FDE 的优势</h2>
+          <div class="card fDE-card">
+            <p>你可以把方向理解成：<strong>产品型 FDE</strong>——先发现客户真实问题，再亲手搭出可运行的 AI 工作流，用使用结果验证产品有没有解决问题。</p>
+            <div class="role-grid">
+              <div class="role-item"><strong>产品视角：做对问题</strong><span>目标客户是谁？痛点是什么？先优化筛选，还是先优化草稿？成功指标怎样定义？</span></div>
+              <div class="role-item"><strong>FDE 视角：做成系统</strong><span>把输入、规则、模型接口、失败路径、人工控制和审计变成可运行实现。</span></div>
+              <div class="role-item"><strong>AI 产品判断：选对职责</strong><span>判断哪步适合模型，哪步必须代码确定，哪里必须让人确认。</span></div>
+              <div class="role-item"><strong>验证视角：证明有改善</strong><span>同一批案例对比 Prompt 版本；把人工修改和回复结果分开看。</span></div>
+            </div>
+            <div class="checklist">
+              <div class="check"><b>① 输入边界：</b>模型这次到底看到了什么？漏了什么？</div>
+              <div class="check"><b>② 决策边界：</b>这是模型建议、代码规则，还是人工决定？</div>
+              <div class="check"><b>③ 质量边界：</b>怎样用 Schema、证据和测试拦截错误？</div>
+              <div class="check"><b>④ 结果边界：</b>怎样证明新版本更好，而不是只感觉更好？</div>
+            </div>
+            <p style="margin-top:16px"><strong>你要练的不是“背模型原理”，而是能把业务问题画成数据流、说清每个交接契约，并用真实案例验证每个判断。</strong></p>
+            <div class="refs" aria-label="项目源码与基线">
+              <a href="../packages/agent_core/screening.py">规则分档</a>
+              <a href="../packages/agent_core/vision.py">视觉模型调用</a>
+              <a href="../services/worker/lead_generation.py">起草输入</a>
+              <a href="../packages/agent_core/prompting.py">Prompt 组装</a>
+              <a href="../packages/agent_core/providers.py">Qwen Provider</a>
+              <a href="../packages/agent_core/contracts.py">输出契约</a>
+              <a href="../labs/phase0-langgraph/src/phase0_graph/lead_workflow.py">人工审核与工作流</a>
+              <a href="./phase2-agent-design-learning.md">Agent 学习基线</a>
+            </div>
+            <h3 style="margin-top:20px">参考资料</h3>
+            <ul class="source-list">
+              <li><a href="https://www.anthropic.com/engineering/building-effective-agents" target="_blank" rel="noreferrer">Anthropic · Building effective agents</a>（2024-12-19）：建议从简单可组合方案开始，只有在效果可证明改善时才增加系统复杂度；强调成功标准、反馈和人工监督。</li>
+              <li><a href="https://developers.openai.com/api/docs/guides/agent-evals" target="_blank" rel="noreferrer">OpenAI · Evaluate agent workflows</a>（在线文档）：用 trace 定位工作流问题，再用可重复数据集比较 Prompt、路由和护栏变更。</li>
+              <li><a href="https://blog.palantir.com/a-day-in-the-life-of-a-palantir-forward-deployed-software-engineer-45ef2de257b1" target="_blank" rel="noreferrer">Palantir · A Day in the Life of a Palantir Forward Deployed Software Engineer</a>（2020-11-03）：一个 FDE 实例涵盖客户问题发现、共同实现、工程质量、生产维护及将现场经验反馈给产品。它是公司角色案例，不是所有 FDE 职位的统一定义。</li>
+              <li><a href="https://jobs.lever.co/palantir/dab396d4-2f14-4796-aac0-0d82883dccf0" target="_blank" rel="noreferrer">Palantir · Forward Deployed Software Engineer 职位描述</a>（访问于 2026-10-05）：强调与客户协作，从问题发现到构建、部署和迭代。</li>
+              <li><a href="https://docs.langchain.com/oss/python/langgraph/interrupts" target="_blank" rel="noreferrer">LangGraph · Interrupts</a>（在线文档）：工作流可暂停、保存状态并等待人工输入；人工停点属于编排设计，而非事后补丁。</li>
+            </ul>
+          </div>
+        </section>
+
+        <footer>
+          本页依据当前项目代码和文档整理。RAG 与向量检索部分为学习用假设，不代表当前实现；模型内部算法说明是通用概念，不代表 Qwen 的专有实现细节。
+        </footer>
+      </main>
+    </div>
+    <script>
+      const sections = [...document.querySelectorAll("main section[id]")];
+      const links = [...document.querySelectorAll(".toc a")];
+      const observer = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (!entry.isIntersecting) continue;
+            for (const link of links) {
+              if (link.hash === `#${entry.target.id}`) link.setAttribute("aria-current", "location");
+              else link.removeAttribute("aria-current");
+            }
+          }
+        },
+        { rootMargin: "-15% 0px -70% 0px" }
+      );
+      sections.forEach((section) => observer.observe(section));
+    </script>
+  </body>
+</html>

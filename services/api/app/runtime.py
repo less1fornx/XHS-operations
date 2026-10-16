@@ -19,7 +19,7 @@ from packages.workflows.lead_workflow import build_graph
 from packages.agent_core.providers import provider_from_env
 from packages.agent_core.style import first_message_style_issues
 from services.worker.lead_generation import audience_for
-from services.worker.lead_generation import build_suggester, load_product_facts
+from services.worker.lead_generation import build_suggester, load_product_facts, positioning_of, strengths_for
 from packages.agent_core.screening import (
     today_in_shanghai,
 )
@@ -43,7 +43,7 @@ def check_first_message(state: dict[str, Any]) -> list[str]:
     """Structure checks for a first cold DM only; comments and replies follow other rules."""
     if state.get("channel") != "dm" or state.get("contact_basis", "cold_outreach") != "cold_outreach":
         return []
-    return first_message_style_issues(state.get("draft") or "", audience_for(state))
+    return first_message_style_issues(state.get("draft") or "", audience_for(state), strengths_for(state), positioning_of(state))
 
 
 graph = build_graph(

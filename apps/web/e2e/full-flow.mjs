@@ -3,6 +3,7 @@
 // When the user finds a problem this did not catch, add the step that would have caught it.
 import { chromium } from 'playwright-core'
 import { existsSync, mkdirSync, readdirSync, utimesSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -14,7 +15,7 @@ if (SHOTS) mkdirSync(SHOTS, { recursive: true })
 
 const results = []; const consoleErrors = []; const failedRequests = []
 const browser = await chromium.launch({ channel: 'chrome', headless: true })
-const context = await browser.newContext({ viewport: { width: 1440, height: 900 } })
+const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, permissions: ['clipboard-read', 'clipboard-write'] })
 await context.route('**xiaohongshu.com/**', (route) => route.abort())   // never touch the real site
 const page = await context.newPage()
 page.on('console', (m) => m.type() === 'error' && consoleErrors.push(m.text()))
@@ -158,6 +159,16 @@ await step('初筛结果：填小红书号、标注分档，文字没有被截�
   const id = page.locator('.id-row input').first(); await id.fill('e2e_shop_01'); await id.blur(); await page.waitForTimeout(500)
   await page.click('.shop-card >> nth=0 >> button:has-text("同意")'); await cutOffText('初筛结果')
 })
+await step('初筛结果：粘贴主页地址（带着分享时的整句话），只留下链接', async () => {
+  const inputs = page.locator('.shop-card .id-row:has-text("主页地址") input'); const count = await inputs.count()
+  expect(count >= 1, '卡片上没有“主页地址”输入框')
+  for (let i = 0; i < count; i++) {
+    const input = page.locator('.shop-card .id-row:has-text("主页地址") input').nth(i)
+    await input.fill(`这家店不错 https://www.xiaohongshu.com/user/profile/5f0e2e00000000000000000${i}?xsec_token=abc 复制后打开小红书`); await input.blur()
+    await page.waitForFunction((n) => document.querySelectorAll('.shop-card .id-row input[placeholder^="粘贴对方主页"]')[n]?.value === `https://www.xiaohongshu.com/user/profile/5f0e2e00000000000000000${n}?xsec_token=abc`, i)
+  }
+  return `${count} 家`
+})
 await step('确认名单并生成草稿', async () => {
   await page.click('text=确认名单并生成草稿'); await page.waitForSelector('text=草稿已生成', { timeout: 60000 })
 })
@@ -185,7 +196,22 @@ await step('审文案：带违规内容的重写被拦下，原草稿保留', as
 })
 await step('改草稿并选原因，通过并现在去发，文案被复制', async () => {
   await page.fill('.draft-editor', (await page.inputValue('.draft-editor')) + ' 改'); await page.waitForSelector('.edit-reasons'); await page.click('.edit-reasons .tag >> nth=0')
+  // A real browser refuses to copy once the new tab has the focus, so the copy has to come first.
+  await page.evaluate(() => {
+    window.__sendOrder = []
+    const copy = document.execCommand.bind(document), open = window.open.bind(window)
+    document.execCommand = (name, ...rest) => { if (name === 'copy') window.__sendOrder.push(['copy', document.activeElement?.value || '']); return copy(name, ...rest) }
+    window.open = (...args) => { window.__sendOrder.push(['open', '']); return open(...args) }
+  })
+  const wanted = await page.inputValue('.draft-editor')
   await page.click('text=通过并现在去发'); await page.waitForSelector('text=发送成功了吗'); expect(await page.locator('.final-text p').count() === 1, '发送中看不到文案')
+  const order = await page.evaluate(() => window.__sendOrder)
+  expect(order.length >= 2 && order[0][0] === 'copy' && order[0][1] === wanted && order[1][0] === 'open', `“现在去发”应该先复制文案、再打开新标签页，实际顺序：${JSON.stringify(order).slice(0, 120)}`)
+  await page.bringToFront(); expect((await page.evaluate(() => navigator.clipboard.readText())) === wanted, '剪贴板里不是这条文案')
+  expect(await page.locator('text=文案已复制').count() === 1 && await page.locator('.copy-failed').count() === 0, '复制成功了却没有提示，或提示成了失败')
+  const href = await page.locator('.panel-heading a.link-button').getAttribute('href')
+  expect((href || '').startsWith('https://www.xiaohongshu.com/user/profile/5f0e2e'), `读店时填的主页地址没有带到发送页：${href}`)
+  expect(await page.locator('text=再次打开对方主页').count() === 1, '发送中没有“再次打开对方主页”')
 })
 await step('确认已发送，进入等回复', async () => { await page.click('text=已发送成功'); await page.waitForSelector('.reply-panel') })
 await step('误点“发送后出现异常”可以取消；自动回复记为“需要我跟进”，回到待处理', async () => {
@@ -210,15 +236,99 @@ await step('手动添加一家店，模型给出建议', async () => {
   await page.fill('input[placeholder^="例如：上海"]', '手动添加的店'); await page.fill('textarea[placeholder^="粘贴对方"]', '法兰绒双排扣西装上新')
   await page.click('text=开始评选'); await page.waitForSelector('.choice-group')
 })
+await step('没有主页地址时是搜索链接；在任务上补填后变成主页链接', async () => {
+  const link = page.locator('.panel-heading a.link-button')
+  expect(((await link.getAttribute('href')) || '').includes('search_result?keyword='), '没填主页地址时不是搜索链接')
+  const input = page.locator('.profile-row input'); await input.fill('我在小红书发现了一家店 http://xhslink.com/m/AbC123 ，复制后打开'); await input.blur()
+  await page.waitForSelector('.panel-heading a.link-button[href="https://xhslink.com/m/AbC123"]')
+  return await link.textContent()
+})
+await step('超过当天基线：先提醒，取消就不排，确定才排', async () => {
+  // Pretend ten DMs are already lined up today, so the next one is past the baseline.
+  execFileSync('sqlite3', [process.env.AGENT_RUN_DB_PATH, "update quota_usage set dm_new_count = 10 where usage_date = date('now','localtime')"])
+  await page.click('.choice >> nth=0'); await page.waitForSelector('.draft-editor')
+  expect(await page.locator('.panel-heading >> text=我方定位：西装内搭工厂').count() === 1, '西装定制店的任务上没有显示“西装内搭工厂”定位')
+  expect((await page.inputValue('.draft-editor')).includes('做西装内搭(横机·针织·POLO)的源头工厂'), '西装定制店的草稿没有按指定的自称写')
+  let reminder = ''
+  page.once('dialog', (dialog) => { reminder = dialog.message(); dialog.dismiss() })
+  await page.click('text=通过并现在去发'); await page.waitForSelector('.alert.error:has-text("已取消")')
+  expect(reminder.includes('第 11 条') && reminder.includes('基线 10 条') && reminder.includes('上限 20 条'), `提醒里没有数量：${reminder}`)
+  expect(reminder.includes('% 的内容和今天已排的'), `提醒里没有相似度：${reminder}`)
+  expect(await page.locator('.draft-editor').count() === 1, '点了取消，任务却离开了审文案')
+  expect((await page.locator('.quota-strip strong').first().textContent()) === '10/10', '点了取消，今日私信数却变了')
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.click('text=通过并现在去发'); await page.waitForSelector('text=发送成功了吗')
+  expect((await page.locator('.quota-strip strong').first().textContent()) === '11/10', '确定之后今日私信数没有变成 11/10')
+  expect(await page.locator('.panel-heading a.link-button[href="https://xhslink.com/m/AbC123"]').count() === 1, '补填的主页地址在选路线、通过文案之后丢了')
+  failedRequests.length = 0; consoleErrors.length = 0   // the two 409s above are the expected reminders
+  await page.click('text=已发送成功'); await page.waitForSelector('.reply-panel')
+  await page.click('.tabs button:has-text("待处理")'); await page.click('text=手动添加')
+  await page.fill('input[placeholder^="例如：上海"]', '第二家手动添加的店'); await page.fill('textarea[placeholder^="粘贴对方"]', '灯芯绒休闲西装上新')
+  await page.click('text=开始评选'); await page.waitForSelector('.choice-group')
+  return reminder
+})
 await step('不联系必须先说原因', async () => {
   await page.click('.choice.danger'); await page.waitForSelector('.end-panel')
   expect(await page.locator('text=确认不联系，结束任务').isDisabled(), '没选原因却能结束')
   await page.click('.end-panel .tag >> nth=0'); await page.click('text=确认不联系，结束任务'); await page.waitForSelector('text=任务已结束')
 })
+await step('不是西装定制店：定位自动换成横机针织工厂，草稿不提西装内搭', async () => {
+  await page.click('.tabs button:has-text("待处理")'); await page.click('text=手动添加')
+  await page.fill('input[placeholder^="例如：上海"]', '成衣品牌的店'); await page.fill('textarea[placeholder^="粘贴对方"]', '秋季上新水洗工装外套')
+  await page.selectOption('label:has-text("店铺类型") select', 'menswear')
+  await page.click('text=开始评选'); await page.waitForSelector('.choice-group')
+  await page.click('.choice >> nth=0'); await page.waitForSelector('.draft-editor')
+  expect(await page.locator('.panel-heading >> text=我方定位：横机针织工厂').count() === 1, '非西装店的任务上没有显示“横机针织工厂”定位')
+  const text = await page.inputValue('.draft-editor')
+  expect(text.includes('专门做横机针织的工厂') && text.includes('工艺') && text.includes('售后'), `非西装店的草稿没有按横机针织工厂的定位写：${text}`)
+  expect(!text.includes('西装内搭') && !text.includes('200'), `非西装店的草稿里出现了西装内搭的说法：${text}`)
+  return text
+})
 await step('原因汇总里出现刚才的原因', async () => {
   await nav('进度与反馈'); await page.waitForSelector('.reason-row')
   const text = (await page.locator('.reason-columns').innerText()).replace(/\s+/g, ' ')
   expect(text.includes('不是西装定制店'), '选路线时填的不联系原因没有进汇总'); expect(text.includes('太长'), '审文案时选的修改原因没有进汇总'); return text.slice(0, 80)
+})
+const sql = (statement) => execFileSync('sqlite3', [process.env.AGENT_RUN_DB_PATH, statement])
+const openRevisits = async () => { await nav('进度与反馈'); await nav('定时巡回'); await page.waitForSelector('.revisit') }
+await step('定时巡回：刚发出的店都还没到期，带着各自的到期日', async () => {
+  await openRevisits()
+  expect(await page.locator('.revisit-card').count() === 0 && await page.locator('text=已到期（0 家）').count() === 1, '刚发出的店不应该到期')
+  expect(await page.locator('.revisit-table tbody tr').count() === 2, '发出过私信的两家店没有都出现在“还没到期”里')
+  expect(await page.locator('.nav-item:has-text("定时巡回") .nav-count').count() === 0, '没有到期的店，导航上却有数字')
+  await cutOffText('定时巡回'); return (await page.locator('.revisit-table tbody').innerText()).replace(/\s+/g, ' ').slice(0, 120)
+})
+await step('定时巡回：过了两个月，没回复的那家到期并在导航上提醒；明确拒绝的不到半年不出现', async () => {
+  sql("update contact_snapshots set sent_at = datetime(sent_at, '-70 days')")
+  await openRevisits(); await page.waitForSelector('.revisit-card')
+  expect(await page.locator('.revisit-card').count() === 1 && await page.locator('.revisit-card:has-text("手动添加的店") >> text=已读不回或没有回复').count() === 1, '到期的应该只有没回复的那家')
+  expect(await page.locator('.revisit-table tbody tr:has-text("明确拒绝")').count() === 1, '明确拒绝的那家才过 70 天，应该还在“还没到期”里')
+  expect((await page.locator('.nav-item:has-text("定时巡回") .nav-count').textContent()) === '1', '导航上没有显示到期的家数')
+})
+await step('定时巡回：拒绝的过了半年才到期，并且排在没回复的后面', async () => {
+  sql("update contact_snapshots set sent_at = datetime(sent_at, '-130 days')")
+  sql("update run_snapshots set payload_json = json_set(payload_json, '$.state.reply.replied_at', '2026-01-01T00:00:00+00:00') where json_extract(payload_json, '$.state.reply.replied_at') is not null")
+  await openRevisits(); await page.waitForFunction(() => document.querySelectorAll('.revisit-card').length === 2)
+  const labels = await page.locator('.revisit-card header .badge').allTextContents()
+  expect(labels[0] === '已读不回或没有回复' && labels[1] === '明确拒绝', `到期列表的先后不对：${labels.join(' → ')}`)
+  await cutOffText('定时巡回（有到期）'); return labels.join(' → ')
+})
+await step('定时巡回：去回访后记“发不出去”，一个月后再提醒，不算回访次数', async () => {
+  const card = page.locator('.revisit-card:has-text("手动添加的店")')
+  expect(((await card.locator('a:has-text("去回访")').getAttribute('href')) || '').startsWith('https://xhslink.com/m/AbC123'), '“去回访”没有用这家店的主页地址')
+  await card.locator('a:has-text("去回访")').click(); await card.locator('button:has-text("发不出去")').click()
+  await page.waitForFunction(() => document.querySelectorAll('.revisit-card').length === 1)
+  const row = (await page.locator('.revisit-table tbody tr:has-text("手动添加的店")').innerText()).replace(/\s+/g, ' ')
+  expect(row.includes('已回访 0/1 次') && row.includes('有 1 次没发出去'), `记了发不出去之后的状态不对：${row}`); return row
+})
+await step('定时巡回：“这次跳过”顺延，“不再回访”之后刷新也不回来', async () => {
+  await page.locator('.revisit-card >> button:has-text("这次跳过")').click()
+  await page.waitForFunction(() => document.querySelectorAll('.revisit-card').length === 0 && document.querySelectorAll('.revisit-table tbody tr').length === 2)
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.locator('.revisit-table tbody tr:has-text("明确拒绝") >> button:has-text("不再回访")').click()
+  await page.waitForFunction(() => document.querySelectorAll('.revisit-table tbody tr').length === 1)
+  await openRevisits(); expect(await page.locator('.revisit-table tbody tr').count() === 1 && await page.locator('.revisit-table tbody tr:has-text("明确拒绝")').count() === 0, '“不再回访”的店刷新后又回来了')
+  expect(await page.locator('.nav-item:has-text("定时巡回") .nav-count').count() === 0, '都处理完了，导航上还有数字')
 })
 await step('工作记录：表头完整、能筛选、能导出', async () => {
   await nav('工作记录'); await page.waitForSelector('.worklog-table tbody tr')

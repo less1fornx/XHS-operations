@@ -172,6 +172,9 @@ label { font-size:12px; }input,textarea,select { font-size:14px; }
 .id-row { display:grid; grid-template-columns:auto 1fr; align-items:center; gap:8px; font-size:12px; }
 .id-row input { padding:5px 8px; font-size:13px; }
 .id-row span { color:var(--ink); font-weight:600; }
+.copy-failed { color:var(--red); font-weight:650; }
+.positioning-note { display:block; margin-top:2px; }
+.profile-row { margin-top:6px; width:min(420px, 70vw); color:var(--muted); }
 .detail-panel .panel-heading small { display:block; margin-top:4px; }
 .run-row.batch-row { grid-template-columns:minmax(0,1fr) auto; }
 .batch-row .run-copy strong,.batch-row .run-copy small { white-space:normal; overflow:visible; overflow-wrap:anywhere; line-height:1.5; }
@@ -275,3 +278,19 @@ label { font-size:12px; }input,textarea,select { font-size:14px; }
 .worklog-table tbody tr:not(.empty):hover, .worklog-table tbody tr:focus { background:#f7faf9; outline:none; }
 .worklog-table tr.empty td { color:var(--muted); text-align:center; }
 .reply-read .slot-picker span { white-space:normal; overflow:visible; }
+.quota-strip strong.over-baseline { color:#b4600e; }
+
+.revisit-title { margin:22px 0 10px; font-size:14px; }
+.revisit-empty { margin:0 0 6px; font-size:13px; }
+.revisit-list { display:grid; gap:12px; }
+.revisit-card { border:1px solid var(--line); border-radius:10px; padding:14px 16px; display:grid; gap:7px; }
+.revisit-card header { display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
+.revisit-name { font-size:15px; color:var(--ink); }
+.revisit-facts, .revisit-method, .revisit-reply { margin:0; font-size:13px; line-height:1.6; }
+.revisit-facts, .revisit-method { color:var(--muted); }
+.revisit-reply { padding:6px 10px; background:#f4f6f5; border-radius:6px; white-space:pre-wrap; }
+.revisit-actions { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin-top:4px; }
+.revisit-actions a.primary-button { text-decoration:none; }
+.revisit-rules { margin-top:22px; font-size:13px; }
+.revisit-rules summary { cursor:pointer; color:var(--teal); font-weight:650; margin-bottom:10px; }
+.revisit-rules p { margin:10px 0 0; }

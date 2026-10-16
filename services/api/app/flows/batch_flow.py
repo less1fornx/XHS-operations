@@ -60,6 +60,7 @@ def draft_selected_shops(batch_id: str, selected: list[tuple[dict[str, Any], str
             run = start_run(
                 RunCreate(
                     **context,
+                    profile_url=item.get("profile_url") or None,
                     contact_basis="cold_outreach",
                     contact_basis_note=basis,
                     screening_snapshot={**screening.model_dump(), "account_kind": extraction.account_kind},

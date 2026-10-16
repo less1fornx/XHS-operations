@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from packages.agent_core.contracts import EvidenceItem, LeadAgentInput
 from packages.agent_core.pipeline import POLICY_GATE_PROVIDER, generate_lead_suggestion
 from packages.agent_core.prompting import PROMPT_VERSION, system_prompt_sha256
+from packages.agent_core.style import pick_strengths, positioning_for, self_description
 from packages.agent_core.providers import (
     GenerationResult,
     LLMProvider,
@@ -18,7 +19,7 @@ from services.api.app.storage import RunStore
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-PRODUCT_FACTS_PATH = PROJECT_ROOT / "config" / "product_facts.v4.json"
+PRODUCT_FACTS_PATH = PROJECT_ROOT / "config" / "product_facts.v7.json"
 
 CONTACT_MODE_BY_BASIS = {
     "cold_outreach": "cold",
@@ -41,6 +42,18 @@ def audience_for(state: dict[str, Any]) -> str:
     return {"enterprise_verified": "store_account", "personal": "personal_shop"}.get(kind, "unknown")
 
 
+def positioning_of(state: dict[str, Any]) -> str:
+    """Which of our two introductions this shop gets; decided by its type, never by the model."""
+    return positioning_for(state.get("shop_type") or "suit_custom")
+
+
+def strengths_for(state: dict[str, Any]) -> list[str]:
+    """The strengths this run's first cold message names; empty for replies and warm contacts."""
+    if state.get("contact_basis", "cold_outreach") != "cold_outreach":
+        return []
+    return pick_strengths(state.get("workflow_run_id") or state.get("task_id") or "run", positioning_of(state))
+
+
 def build_agent_input(
     state: dict[str, Any],
     product_facts: list[str],
@@ -57,8 +70,9 @@ def build_agent_input(
         evidence.append(EvidenceItem(evidence_id="e2", text=shop_note[:1000], source_type="profile"))
     if basis_note:
         evidence.append(EvidenceItem(evidence_id="e3", text=basis_note[:1000], source_type="manual"))
+    case_id = state.get("workflow_run_id") or state.get("task_id") or "run"
     return LeadAgentInput(
-        case_id=state.get("workflow_run_id") or state.get("task_id") or "run",
+        case_id=case_id,
         shop_name=state["shop_name"][:200],
         xhs_account=(state.get("xhs_id") or None),
         profile_url=state.get("profile_url") or None,
@@ -73,6 +87,9 @@ def build_agent_input(
         contact_history_note=basis_note[:2000] or "此前没有互动或私信",
         prior_outcome="replied" if basis == "prior_conversation" else "none",
         product_facts=product_facts,
+        positioning=positioning_of(state),
+        self_description=self_description(positioning_of(state)),
+        strengths_to_use=strengths_for(state),
         human_selected_route=forced_route,
         previous_draft=((revision or {}).get("previous_draft") or "")[:2000] or None,
         revision_request=((revision or {}).get("request") or "")[:500] or None,
@@ -124,6 +141,7 @@ def build_suggester(
                 "provider": result.provider,
                 "model": result.model,
                 "prompt_version": result.prompt_version,
+                "positioning": agent_input.positioning,
                 "latency_ms": result.latency_ms,
             },
             "suggested_channel": ROUTE_TO_CHANNEL[output.route],

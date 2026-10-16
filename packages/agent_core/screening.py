@@ -386,6 +386,22 @@ def normalize_xhs_id(value: str | None) -> str:
     return text.strip()
 
 
+# The two shapes a profile link takes: the web address bar, and the app's share link.
+_PROFILE_URL = re.compile(
+    r"https://(?:www\.xiaohongshu\.com/user/profile/[0-9A-Za-z]+|xhslink\.com/[0-9A-Za-z]+)[0-9A-Za-z/_\-?=&%.~+]*"
+)
+
+
+PROFILE_URL_HINT = "这不是小红书主页地址。电脑上复制对方主页的地址栏；手机上在对方主页点“分享—复制链接”"
+
+
+def normalize_profile_url(value: str | None) -> str:
+    """Pull the shop's profile link out of what the human pasted (the app's share text wraps
+    the link in a sentence). Anything that is not a Xiaohongshu profile link comes back empty."""
+    match = _PROFILE_URL.search((value or "").replace("http://", "https://"))
+    return match.group(0) if match else ""
+
+
 def audience_of(extraction: ShopExtraction) -> str:
     """Program rule, not a model guess: verified or multi-store accounts are read by
     staff; a personal account running a shop is read by the maker (user 2026-10-05)."""
@@ -446,6 +462,8 @@ def today_in_shanghai() -> date:
 
 
 __all__ = [
+    "PROFILE_URL_HINT",
+    "normalize_profile_url",
     "normalize_xhs_id",
     "NotShopPageError",
     "MAX_IMAGES_PER_SHOP",

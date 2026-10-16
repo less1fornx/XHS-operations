@@ -358,6 +358,33 @@ class RunsMixin(StoreBase):
             session.commit()
             return payload
 
+    def set_revisit(self, run_id: str, revisit: dict[str, Any]) -> dict[str, Any]:
+        """Keep what the human decided when this shop came up for a revisit."""
+        with Session(self.engine) as session:
+            snapshot = session.get(RunSnapshot, run_id)
+            if snapshot is None:
+                raise BusinessRuleError("run_not_found", "工作流不存在")
+            payload = json.loads(snapshot.payload_json)
+            payload["state"]["revisit"] = revisit
+            snapshot.payload_json = json.dumps(payload, ensure_ascii=False)
+            session.add(snapshot)
+            session.commit()
+            return payload
+
+    def set_profile_url(self, run_id: str, url: str) -> dict[str, Any]:
+        """Human adds the shop's profile link after the run exists, so sending opens it directly."""
+        with Session(self.engine) as session:
+            snapshot = session.get(RunSnapshot, run_id)
+            if snapshot is None:
+                raise BusinessRuleError("run_not_found", "工作流不存在")
+            payload = json.loads(snapshot.payload_json)
+            payload["state"]["profile_url"] = url
+            snapshot.payload_json = json.dumps(payload, ensure_ascii=False)
+            snapshot.updated_at = utc_now()
+            session.add(snapshot)
+            session.commit()
+            return payload
+
     def update_draft(self, run_id: str, text: str, edit: dict[str, Any]) -> dict[str, Any]:
         """Human changes an already-approved text before sending; the change is kept."""
         with Session(self.engine) as session:

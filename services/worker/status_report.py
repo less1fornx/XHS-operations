@@ -12,6 +12,7 @@ from packages.agent_core.edits import EDIT_REASONS, END_REASONS
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB = PROJECT_ROOT / "data" / "agent_ops.db"
 EVAL_CASES = PROJECT_ROOT / "evals" / "phase2_cases.v1.json"
+ACCEPTANCE_CASES = PROJECT_ROOT / "evals" / "acceptance_cases.v1.json"
 
 # Minimum sample size before a rate means anything, and the bar it has to clear.
 # First version proposed by Claude; the user owns these numbers (docs/STATUS.md).
@@ -28,7 +29,9 @@ def _rate(hit: int, total: int) -> float | None:
     return round(hit / total, 3) if total else None
 
 
-def collect(db_path: Path = DEFAULT_DB, eval_cases: Path = EVAL_CASES) -> dict[str, Any]:
+def collect(
+    db_path: Path = DEFAULT_DB, eval_cases: Path = EVAL_CASES, acceptance_cases: Path = ACCEPTANCE_CASES
+) -> dict[str, Any]:
     """Count what has really happened, per stage, straight from the database."""
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
@@ -101,6 +104,11 @@ def collect(db_path: Path = DEFAULT_DB, eval_cases: Path = EVAL_CASES) -> dict[s
         1 for case in cases if (case.get("input") or case).get("prior_outcome") not in no_contact
     )
 
+    # Acceptance cases are real shops that were actually sent to; every one of them tests the model.
+    real_cases = (
+        len(json.loads(acceptance_cases.read_text(encoding="utf-8"))["cases"]) if acceptance_cases.exists() else 0
+    )
+
     tier_marked = tier_agree + tier_disagree
     return {
         "read": {"shops_read": shops_read, "shops_failed": shops_failed, "with_xhs_id": with_xhs_id,
@@ -116,7 +124,11 @@ def collect(db_path: Path = DEFAULT_DB, eval_cases: Path = EVAL_CASES) -> dict[s
                   # (asked a question, wanted material). The near-term goal (user 2026-10-06).
                   "effective": replied - declined,
                   "interest_rate": _rate(replied - declined, replied + no_reply)},
-        "eval": {"cases": len(cases), "model_cases": eval_model_cases},
+        "eval": {
+            "cases": len(cases) + real_cases,
+            "model_cases": eval_model_cases + real_cases,
+            "real_cases": real_cases,
+        },
         "model_calls": model_calls,
         "open_notes": open_notes,
         "end_reasons": end_reasons,
@@ -171,7 +183,7 @@ def stage_rows(stats: dict[str, Any]) -> list[dict[str, Any]]:
          **counted(reply["replied"] + reply["no_reply"], MIN_SENT)},
         {"key": "eval", "label": "评测集", "measure": "真正考模型的题数",
          "how": "攒够真实店铺后，由你挑有代表性的，告诉 Claude 每家的预期。", "view": None,
-         "detail": f"共 {evals['cases']} 题", **counted(evals["model_cases"], MIN_EVAL_MODEL_CASES)},
+         "detail": f"共 {evals['cases']} 题，其中来自真实店铺 {evals['real_cases']} 题", **counted(evals["model_cases"], MIN_EVAL_MODEL_CASES)},
     ]
 
 
@@ -204,7 +216,7 @@ def render(stats: dict[str, Any]) -> str:
         + (f"；另有 {send['sent_before_snapshots']} 家发送于快照功能之前，不计入分析" if send["sent_before_snapshots"] else ""),
         f"⑤ 回复　　有效对话 {reply['effective']} 家（对方问了问题或要了资料）；回复了但拒绝 {reply['declined']} 家；"
         f"已读不回或 15 天未回复 {reply['no_reply']} 家（有效对话占已有结果的 {_pct(reply['interest_rate'])}）",
-        f"⑥ 评测集　共 {evals['cases']} 题，其中真正考模型的 {evals['model_cases']} 题（目标：{MIN_EVAL_MODEL_CASES} 题）",
+        f"⑥ 评测集　共 {evals['cases']} 题，其中真正考模型的 {evals['model_cases']} 题、来自真实店铺的 {evals['real_cases']} 题（目标：{MIN_EVAL_MODEL_CASES} 题）",
         "",
         f"模型调用累计：{json.dumps(stats['model_calls'], ensure_ascii=False)}",
     ]

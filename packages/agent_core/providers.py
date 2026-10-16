@@ -161,10 +161,14 @@ class MockProvider:
         else:
             route = "dm"
             reason = "目标店铺与产品方向相关，可进行一次低压力的 B2B 需求询问"
-            # Same shape the v5 prompt asks for: their point, one line on us, a question about them.
+            # Same shape the prompt asks for: their point, then who we are, the strengths, and the ask.
+            knit = agent_input.positioning == "flat_knit"
+            who = agent_input.self_description or "做西装内搭的毛衫工厂"
+            strengths = "，".join(agent_input.strengths_to_use) or "也对接了约200家西装定制店"
             draft = (
-                f"看到你们最近的内容提到{primary.text}。"
-                "我们是做西装内搭的毛衫工厂，想请教一下：客人订这类西装时，里面一般怎么搭？"
+                f"看到贵店最近的内容提到{primary.text}。"
+                + ("往后要加针织款可以交给我们，" if knit else "这类西装里面那一件正是我们在做的，")
+                + f"我们是{who}，{strengths}，想和贵店合作{'针织款' if knit else '西装内搭'}，支持一件起订。"
             )
             if agent_input.revision_request:
                 # Make a reviewer's instruction visible in mock runs.

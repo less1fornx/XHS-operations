@@ -53,14 +53,17 @@ def test_status_report_counts_real_records(tmp_path: Path) -> None:
         {"input": {"prior_outcome": "none"}}, {"input": {"prior_outcome": "blocked"}},
     ]), encoding="utf-8")
 
-    stats = collect(db, cases)
+    real = tmp_path / "real.json"
+    real.write_text(json.dumps({"cases": [{}, {}, {}]}), encoding="utf-8")
+
+    stats = collect(db, cases, real)
 
     assert stats["read"] == {
         "shops_read": 2, "shops_failed": 1, "with_xhs_id": 1, "corrected": 1, "xhs_id_rate": 0.5,
     }
     assert stats["tier"]["tier_agree_rate"] == 0.5
     assert stats["send"]["sent"] == 0 and stats["reply"]["reply_rate"] is None
-    assert stats["eval"] == {"cases": 2, "model_cases": 1}
+    assert stats["eval"] == {"cases": 5, "model_cases": 4, "real_cases": 3}
     assert "样本不足（2/30）" in render(stats)
 
     store.add_feedback_note("page", "历史批次的标题显示不全")

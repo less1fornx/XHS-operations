@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -62,6 +63,12 @@ class LeadAgentInput(StrictModel):
     contact_history_note: str = Field(min_length=1, max_length=2000)
     prior_outcome: PriorOutcome
     product_facts: list[str] = Field(min_length=1, max_length=20)
+    # Who we say we are is decided by the program from the shop type (user 2026-10-09):
+    # a suit shop hears about suit inner layers, every other account about flat knitting.
+    positioning: Literal["suit_inner", "flat_knit"] = "suit_inner"
+    self_description: str = Field(default="", max_length=100)
+    # Chosen by the program for a first cold DM; the draft names these strengths and no others.
+    strengths_to_use: list[str] = Field(default_factory=list, max_length=4)
     brand_context: str | None = Field(default=None, max_length=2000)
     # Set only when a human has already chosen the route and needs a draft for it.
     human_selected_route: Literal["dm", "comment"] | None = None
@@ -105,8 +112,9 @@ def validate_evidence_refs(
 ) -> list[str]:
     """Return invalid evidence ids instead of trusting model citations."""
     known = {item.evidence_id for item in agent_input.evidence}
-    refs = set(output.evidence_refs)
-    refs.update(point.evidence_ref for point in output.personalization_points)
+    cited = [*output.evidence_refs, *(point.evidence_ref for point in output.personalization_points)]
+    # Models sometimes put two ids in one field ("e1,e2"); that is still a citation of known evidence.
+    refs = {part for ref in cited for part in re.split(r"[\s,，、;；]+", ref) if part}
     return sorted(refs - known)
 
 

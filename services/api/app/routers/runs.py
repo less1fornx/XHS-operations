@@ -21,6 +21,7 @@ from ..runtime import (  # noqa: E402
 )
 from packages.workflows.lead_workflow import policy_flags  # noqa: E402
 from packages.agent_core.edits import END_REASONS, describe_edit  # noqa: E402
+from packages.agent_core.screening import PROFILE_URL_HINT, normalize_profile_url  # noqa: E402
 from packages.agent_core.outcomes import (  # noqa: E402
     scrub_contact_info,
 )
@@ -50,6 +51,8 @@ class ContentDecision(BaseModel):
     scheduled_for: str | None = None
     edit_reasons: list[str] = Field(default_factory=list, max_length=10)
     edit_note: str | None = Field(default=None, max_length=500)
+    # Set after the reviewer was shown the over-baseline reminder and chose to go on.
+    confirm_over_baseline: bool = False
 
 
 class DraftEdit(BaseModel):
@@ -173,6 +176,7 @@ def decide_content(
                 record["state"]["task_id"],
                 record["state"].get("channel", ""),
                 payload.edited_text or record["state"].get("draft", ""),
+                payload.confirm_over_baseline,
             )
             reserved = True
         except BusinessRuleError as exc:
@@ -306,6 +310,22 @@ def regenerate_draft(run_id: str, payload: RegenerateRequest | None = None) -> d
         return store.replace_model_draft(run_id, update, instruction=instruction or None)
     except BusinessRuleError as exc:
         raise HTTPException(status_code=409, detail=f"{exc.code}: {exc.message}") from exc
+
+
+class ProfileUrl(BaseModel):
+    profile_url: str = Field(max_length=2000)
+
+
+@router.post("/api/runs/{run_id}/profile-url")
+def set_profile_url(run_id: str, payload: ProfileUrl) -> dict[str, Any]:
+    """Fill in or clear the shop's profile link on an existing run."""
+    url = normalize_profile_url(payload.profile_url)
+    if payload.profile_url.strip() and not url:
+        raise HTTPException(status_code=422, detail=PROFILE_URL_HINT)
+    try:
+        return store.set_profile_url(run_id, url)
+    except BusinessRuleError as exc:
+        raise HTTPException(status_code=404, detail=f"{exc.code}: {exc.message}") from exc
 
 
 @router.post("/api/runs/{run_id}/open")
